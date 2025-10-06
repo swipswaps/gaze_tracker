@@ -1,12 +1,11 @@
 import React from 'react';
 
 interface IconProps {
-  name: 'camera' | 'mouse' | 'keyboard' | 'eye' | 'click' | 'target';
+  name: 'camera' | 'mouse' | 'keyboard' | 'eye' | 'click' | 'target' | 'switch';
   className?: string;
 }
 
 const Icon: React.FC<IconProps> = ({ name, className = 'w-6 h-6' }) => {
-  // FIX: Changed JSX.Element to React.ReactElement to resolve "Cannot find namespace 'JSX'" error.
   const icons: { [key: string]: React.ReactElement } = {
     camera: (
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
@@ -41,6 +40,11 @@ const Icon: React.FC<IconProps> = ({ name, className = 'w-6 h-6' }) => {
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18z" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.75v3.75m0 7.5V12m0 0h3.75m-3.75 0H8.25" />
         <path strokeLinecap="round" strokeLinejoin="round" d="M12 12.75a.75.75 0 100-1.5.75.75 0 000 1.5z" />
+      </svg>
+    ),
+    switch: (
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M7.5 21 3 16.5m0 0L7.5 12M3 16.5h13.5m0-13.5L21 7.5m0 0L16.5 12M21 7.5H7.5" />
       </svg>
     ),
   };

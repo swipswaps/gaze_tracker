@@ -1,33 +1,61 @@
-
-import React, { useEffect } from 'react';
+import React, { useEffect, useRef } from 'react';
+import Icon from './Icon';
 
 interface WebcamViewProps {
   videoRef: React.RefObject<HTMLVideoElement>;
   isEnabled: boolean;
+  selectedCameraId: string;
+  onStreamAcquired: (stream: MediaStream) => void;
 }
 
-const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled }) => {
+const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, onStreamAcquired }) => {
+  const streamAcquiredFiredRef = useRef(false);
+
   useEffect(() => {
     if (isEnabled) {
-      navigator.mediaDevices.getUserMedia({ video: { width: 1280, height: 720 } })
+      const constraints = {
+        video: {
+          deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+          width: 1280,
+          height: 720,
+        },
+      };
+      
+      let active = true;
+
+      navigator.mediaDevices.getUserMedia(constraints)
         .then(stream => {
-          if (videoRef.current) {
+          if (active && videoRef.current) {
             videoRef.current.srcObject = stream;
+            if (!streamAcquiredFiredRef.current) {
+              onStreamAcquired(stream);
+              streamAcquiredFiredRef.current = true;
+            }
+          } else {
+            // cleanup if component unmounted before stream was attached
+             stream.getTracks().forEach(track => track.stop());
           }
         })
         .catch(err => {
           console.error("Error accessing webcam:", err);
           alert("Could not access webcam. Please ensure permissions are granted and no other application is using it.");
         });
-    }
-    
-    return () => {
+
+      return () => {
+        active = false;
+        if (videoRef.current && videoRef.current.srcObject) {
+          (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+          videoRef.current.srcObject = null;
+        }
+      };
+    } else {
+      // Cleanup if isEnabled becomes false
       if (videoRef.current && videoRef.current.srcObject) {
-        const stream = videoRef.current.srcObject as MediaStream;
-        stream.getTracks().forEach(track => track.stop());
+        (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
+        videoRef.current.srcObject = null;
       }
-    };
-  }, [isEnabled, videoRef]);
+    }
+  }, [isEnabled, selectedCameraId, videoRef, onStreamAcquired]);
 
   return (
     <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl shadow-2xl overflow-hidden border-2 border-gray-700">
@@ -57,14 +85,5 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled }) => {
     </div>
   );
 };
-
-// Re-export Icon locally to satisfy dependency rule
-const Icon: React.FC<{ name: 'camera'; className?: string; }> = ({ name, className = 'w-6 h-6' }) => (
-    <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
-        <path strokeLinecap="round" strokeLinejoin="round" d="M6.827 6.175A2.31 2.31 0 015.186 7.23c-.38.054-.757.112-1.134.175C2.999 7.58 2.25 8.507 2.25 9.574V18a2.25 2.25 0 002.25 2.25h15A2.25 2.25 0 0021.75 18V9.574c0-1.067-.75-1.994-1.802-2.169a47.865 47.865 0 00-1.134-.175 2.31 2.31 0 01-1.64-1.055l-.822-1.316a2.192 2.192 0 00-1.736-1.039 48.776 48.776 0 00-5.232 0 2.192 2.192 0 00-1.736 1.039l-.821 1.316z" />
-        <path strokeLinecap="round" strokeLinejoin="round" d="M16.5 12.75a4.5 4.5 0 11-9 0 4.5 4.5 0 019 0zM18.75 10.5h.008v.008h-.008V10.5z" />
-    </svg>
-);
-
 
 export default WebcamView;

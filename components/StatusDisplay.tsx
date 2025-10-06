@@ -5,9 +5,12 @@ import Icon from './Icon';
 interface StatusDisplayProps {
   mode: Mode;
   onRecalibrate: () => void;
+  cameras: MediaDeviceInfo[];
+  selectedCameraId: string;
+  onCameraChange: (deviceId: string) => void;
 }
 
-const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate }) => {
+const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate, cameras, selectedCameraId, onCameraChange }) => {
   const getStatusText = () => {
     switch (mode) {
       case Mode.Gaze:
@@ -63,6 +66,26 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate }) =>
       </div>
       
       <div className="mt-6 pt-4 border-t border-gray-700 space-y-4">
+        {cameras.length > 1 && (
+          <div className="space-y-2">
+            <label htmlFor="camera-select" className="flex items-center text-sm font-medium text-gray-300">
+              <Icon name="switch" className="w-5 h-5 mr-2" />
+              Switch Camera
+            </label>
+            <select
+              id="camera-select"
+              value={selectedCameraId}
+              onChange={(e) => onCameraChange(e.target.value)}
+              className="w-full px-3 py-2 bg-gray-700 border border-gray-600 rounded-lg shadow-sm focus:outline-none focus:ring-2 focus:ring-cyan-500 focus:border-cyan-500 text-white transition"
+            >
+              {cameras.map((camera) => (
+                <option key={camera.deviceId} value={camera.deviceId}>
+                  {camera.label || `Camera ${camera.deviceId.substring(0, 8)}`}
+                </option>
+              ))}
+            </select>
+          </div>
+        )}
         <button
           onClick={onRecalibrate}
           className="w-full flex items-center justify-center px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-semibold transition-colors shadow-md"
