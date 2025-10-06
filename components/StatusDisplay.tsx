@@ -1,36 +1,21 @@
 import React from 'react';
-import { CalibrationState } from '../types';
 import Icon from './Icon';
 
 interface StatusDisplayProps {
-  calibrationState: CalibrationState;
+  isCvLoading: boolean;
   cameras: MediaDeviceInfo[];
   selectedCameraId: string;
   onCameraChange: (deviceId: string) => void;
-  onRecalibrate: () => void;
+  onClearCorrections: () => void;
 }
 
-const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, cameras, selectedCameraId, onCameraChange, onRecalibrate }) => {
+const StatusDisplay: React.FC<StatusDisplayProps> = ({ isCvLoading, cameras, selectedCameraId, onCameraChange, onClearCorrections }) => {
   const getStatusText = () => {
-    switch (calibrationState) {
-      case 'inProgress':
-        return 'Calibrating...';
-      case 'finished':
-        return 'Tracking Active';
-      default:
-        return 'Initializing...';
-    }
+    return isCvLoading ? 'Initializing...' : 'Tracking Active';
   };
 
   const getStatusColor = () => {
-    switch (calibrationState) {
-      case 'inProgress':
-        return 'text-yellow-400';
-      case 'finished':
-        return 'text-cyan-400';
-      default:
-        return 'text-gray-400';
-    }
+    return isCvLoading ? 'text-yellow-400' : 'text-cyan-400';
   };
 
   return (
@@ -38,9 +23,9 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, cameras
       <h2 className="text-2xl font-bold text-center mb-2">Controls</h2>
       <div className="text-center mb-6">
         <p className={`text-lg font-semibold ${getStatusColor()}`}>{getStatusText()}</p>
-        {calibrationState === 'finished' && (
-          <button onClick={onRecalibrate} className="mt-2 text-sm underline text-cyan-400 hover:text-cyan-300 transition-colors">
-            Recalibrate
+        {!isCvLoading && (
+          <button onClick={onClearCorrections} className="mt-2 text-sm underline text-cyan-400 hover:text-cyan-300 transition-colors">
+            Clear Corrections
           </button>
         )}
       </div>
@@ -50,7 +35,7 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, cameras
           <Icon name="eye" className="w-8 h-8 text-cyan-400 flex-shrink-0 mt-1" />
           <div>
             <h3 className="font-bold">Gaze Tracking</h3>
-            <p className="text-sm text-gray-400">The cursor will follow your gaze after calibration is complete.</p>
+            <p className="text-sm text-gray-400">The cursor will follow your gaze. Accuracy improves with corrections.</p>
           </div>
         </div>
         
