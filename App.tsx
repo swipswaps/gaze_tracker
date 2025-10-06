@@ -3,7 +3,7 @@ import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
 import CalibrationScreen from './components/CalibrationScreen';
 import GazeCursor from './components/GazeCursor';
-import { ClickState, CalibrationState, CalibrationPointData, CalibrationMap, BlinkStateMachine } from './types';
+import { ClickState, CalibrationState, CalibrationPointData, BlinkStateMachine } from './types';
 import Icon from './components/Icon';
 
 // Extend the Window interface to include the 'cv' property
@@ -25,6 +25,53 @@ const EYE_CASCADE_URL = 'https://raw.githubusercontent.com/opencv/opencv/4.x/dat
 const EAR_THRESHOLD = 0.25;
 const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
+const K_NEAREST_NEIGHBORS = 4;
+const INVERSE_DISTANCE_POWER = 2;
+
+// --- Helper Functions ---
+const mapEyeToScreen = (currentEyePos: { x: number, y: number }, calibrationPoints: CalibrationPointData[]) => {
+    if (calibrationPoints.length < K_NEAREST_NEIGHBORS) {
+        return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    }
+
+    const distances = calibrationPoints.map(point => ({
+        ...point,
+        dist: Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2))
+    }));
+
+    distances.sort((a, b) => a.dist - b.dist);
+    const nearestNeighbors = distances.slice(0, K_NEAREST_NEIGHBORS);
+
+    let totalWeight = 0;
+    let weightedScreenX = 0;
+    let weightedScreenY = 0;
+    const epsilon = 1e-9;
+
+    nearestNeighbors.forEach(neighbor => {
+        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
+        totalWeight += weight;
+        weightedScreenX += neighbor.screen.x * weight;
+        weightedScreenY += neighbor.screen.y * weight;
+    });
+    
+    if (totalWeight === 0) {
+       return { 
+           x: nearestNeighbors[0].screen.x * window.innerWidth,
+           y: nearestNeighbors[0].screen.y * window.innerHeight
+       };
+    }
+
+    const finalScreenX = weightedScreenX / totalWeight;
+    const finalScreenY = weightedScreenY / totalWeight;
+    
+    const clampedX = Math.max(0, Math.min(1, finalScreenX));
+    const clampedY = Math.max(0, Math.min(1, finalScreenY));
+
+    return {
+        x: clampedX * window.innerWidth,
+        y: clampedY * window.innerHeight,
+    };
+};
 
 
 const App: React.FC = () => {
@@ -33,7 +80,6 @@ const App: React.FC = () => {
   const processingCanvasRef = useRef<HTMLCanvasElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const eyePositionRef = useRef({ x: 0.5, y: 0.5 });
-  const calibrationMapRef = useRef<CalibrationMap | null>(null);
   const processVideoFrameIdRef = useRef<number>(0);
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
@@ -41,6 +87,8 @@ const App: React.FC = () => {
   const rightEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
   const targetPositionRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const smoothedCursorPosRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const calibrationStateRef = useRef<CalibrationState>('notStarted');
+  const calibrationDataRef = useRef<CalibrationPointData[]>([]);
 
   // State
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
@@ -56,6 +104,14 @@ const App: React.FC = () => {
   const [isCorrectionMode, setIsCorrectionMode] = useState(false);
   const [correctionFeedback, setCorrectionFeedback] = useState(false);
 
+  // Sync state to refs for use in RAF loop
+  useEffect(() => {
+    calibrationStateRef.current = calibrationState;
+  }, [calibrationState]);
+  useEffect(() => {
+    calibrationDataRef.current = calibrationData;
+  }, [calibrationData]);
+
   const triggerClick = useCallback((side: 'left' | 'right') => {
     setClickState(side);
     setTimeout(() => setClickState('none'), 200); // Visual feedback duration
@@ -64,7 +120,6 @@ const App: React.FC = () => {
   // Load OpenCV and classifiers
   useEffect(() => {
     const loadCv = async () => {
-      // Poll for OpenCV to be ready
       await new Promise<void>((resolve) => {
         const interval = setInterval(() => {
           if (window.cv && window.cv.CascadeClassifier) {
@@ -76,12 +131,9 @@ const App: React.FC = () => {
 
       const createFileFromUrl = async (path: string, url: string) => {
         const response = await fetch(url);
-        if (!response.ok) {
-          throw new Error(`Failed to fetch ${url}: ${response.statusText}`);
-        }
+        if (!response.ok) throw new Error(`Failed to fetch ${url}: ${response.statusText}`);
         const data = await response.arrayBuffer();
-        const dataArr = new Uint8Array(data);
-        window.cv.FS_createDataFile('/', path, dataArr, true, false, false);
+        window.cv.FS_createDataFile('/', path, new Uint8Array(data), true, false, false);
       };
 
       await createFileFromUrl('haarcascade_frontalface_default.xml', FACE_CASCADE_URL);
@@ -189,7 +241,7 @@ const App: React.FC = () => {
         const face = faces.get(0);
 
         if (displayCtx && displayCanvas) {
-            drawDotsForRect(displayCtx, face, 'rgba(0, 255, 255, 0.7)', 4); // Cyan dots for face
+            drawDotsForRect(displayCtx, face, 'rgba(0, 255, 255, 0.7)', 4);
         }
 
         const faceROI = gray.roi(face);
@@ -204,7 +256,7 @@ const App: React.FC = () => {
           if (displayCtx && displayCanvas) {
               eyeRects.forEach(eye => {
                    const absoluteEyeRect = { x: face.x + eye.x, y: face.y + eye.y, width: eye.width, height: eye.height };
-                   drawDotsForRect(displayCtx, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3); // Green dots for eyes
+                   drawDotsForRect(displayCtx, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3);
               });
           }
 
@@ -214,70 +266,43 @@ const App: React.FC = () => {
               const eyeROI = faceROI.roi(eyeRect);
               let pupilCenter;
 
-              // More robust pupil detection pipeline
               const blurred = new window.cv.Mat();
               window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
-              
               const thresholded = new window.cv.Mat();
               window.cv.adaptiveThreshold(blurred, thresholded, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
-
               const kernel = window.cv.Mat.ones(2, 2, window.cv.CV_8U);
               const opening = new window.cv.Mat();
               const closing = new window.cv.Mat();
               window.cv.morphologyEx(thresholded, opening, window.cv.MORPH_OPEN, kernel);
               window.cv.morphologyEx(opening, closing, window.cv.MORPH_CLOSE, kernel);
-
               const contours = new window.cv.MatVector();
               const hierarchy = new window.cv.Mat();
               window.cv.findContours(closing, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
 
-              let bestPupil = null;
-              let maxScore = 0;
-
+              let bestPupil = null; let maxScore = 0;
               for (let i = 0; i < contours.size(); ++i) {
                   const contour = contours.get(i);
                   const area = window.cv.contourArea(contour);
                   const perimeter = window.cv.arcLength(contour, true);
-                  
-                  if (perimeter === 0 || area < 10) {
-                      contour.delete();
-                      continue;
-                  }
-                  
+                  if (perimeter === 0 || area < 10) { contour.delete(); continue; }
                   const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
                   const validArea = area > (eyeRect.width * eyeRect.height * 0.05) && area < (eyeRect.width * eyeRect.height * 0.5);
-
                   if (circularity > 0.7 && validArea) {
                       const score = circularity * area;
                       if (score > maxScore) {
                          if (bestPupil) bestPupil.delete();
-                         maxScore = score;
-                         bestPupil = contour;
-                      } else {
-                         contour.delete();
-                      }
-                  } else {
-                      contour.delete();
-                  }
+                         maxScore = score; bestPupil = contour;
+                      } else { contour.delete(); }
+                  } else { contour.delete(); }
               }
-
               if (bestPupil) {
                   const M = window.cv.moments(bestPupil);
                   if (M.m00 !== 0) {
-                      pupilCenter = {
-                          x: face.x + eyeRect.x + M.m10 / M.m00,
-                          y: face.y + eyeRect.y + M.m01 / M.m00
-                      };
+                      pupilCenter = { x: face.x + eyeRect.x + M.m10 / M.m00, y: face.y + eyeRect.y + M.m01 / M.m00 };
                   }
                   bestPupil.delete();
               }
-              
-              if (!pupilCenter) {
-                  pupilCenter = {
-                      x: face.x + eyeRect.x + eyeRect.width / 2,
-                      y: face.y + eyeRect.y + eyeRect.height / 2
-                  };
-              }
+              if (!pupilCenter) { pupilCenter = { x: face.x + eyeRect.x + eyeRect.width / 2, y: face.y + eyeRect.y + eyeRect.height / 2 }; }
               
               if (displayCtx && displayCanvas) {
                   displayCtx.fillStyle = 'rgba(255, 0, 0, 0.8)';
@@ -286,14 +311,7 @@ const App: React.FC = () => {
                   displayCtx.fill();
               }
               
-              eyeROI.delete();
-              blurred.delete();
-              thresholded.delete();
-              opening.delete();
-              closing.delete();
-              kernel.delete();
-              contours.delete();
-              hierarchy.delete();
+              eyeROI.delete(); blurred.delete(); thresholded.delete(); opening.delete(); closing.delete(); kernel.delete(); contours.delete(); hierarchy.delete();
               return pupilCenter;
           };
 
@@ -308,20 +326,9 @@ const App: React.FC = () => {
           
           eyePositionRef.current = { x: 1 - normalizedX, y: normalizedY };
           
-          if (calibrationMapRef.current) {
-            const map = calibrationMapRef.current;
-            const raw = eyePositionRef.current;
-            
-            let x = (raw.x - map.eyeMinX) / (map.eyeMaxX - map.eyeMinX);
-            let y = (raw.y - map.eyeMinY) / (map.eyeMaxY - map.eyeMinY);
-
-            x = Math.max(0, Math.min(1, x));
-            y = Math.max(0, Math.min(1, y));
-
-            targetPositionRef.current = {
-                x: x * window.innerWidth,
-                y: y * window.innerHeight
-            };
+          if (calibrationStateRef.current === 'finished') {
+            const newTarget = mapEyeToScreen(eyePositionRef.current, calibrationDataRef.current);
+            targetPositionRef.current = newTarget;
           }
 
           const leftEAR = calculateEAR(leftEyeRect);
@@ -418,23 +425,6 @@ const App: React.FC = () => {
         setCalibrationState('finished');
     }
   }, [calibrationState, calibrationPointIndex]);
-  
-  // Dynamic Calibration Map Calculation
-  useEffect(() => {
-    if (calibrationData.length >= TOTAL_CALIBRATION_POINTS) {
-      let eyeMinX = Infinity, eyeMaxX = -Infinity, eyeMinY = Infinity, eyeMaxY = -Infinity;
-      calibrationData.forEach(d => {
-        eyeMinX = Math.min(eyeMinX, d.eye.x); eyeMaxX = Math.max(eyeMaxX, d.eye.x);
-        eyeMinY = Math.min(eyeMinY, d.eye.y); eyeMaxY = Math.max(eyeMaxY, d.eye.y);
-      });
-      const paddingX = (eyeMaxX - eyeMinX) * 0.1; const paddingY = (eyeMaxY - eyeMinY) * 0.1;
-      calibrationMapRef.current = { eyeMinX: eyeMinX - paddingX, eyeMaxX: eyeMaxX + paddingX, eyeMinY: eyeMinY - paddingY, eyeMaxY: eyeMaxY + paddingY };
-      if(calibrationState === 'inProgress') {
-        setCalibrationState('finished');
-      }
-    }
-  }, [calibrationData, calibrationState]);
-
 
   // Auto-start calibration
   useEffect(() => {
