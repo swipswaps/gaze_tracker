@@ -27,7 +27,7 @@ const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
 const K_NEAREST_NEIGHBORS = 4;
 const INVERSE_DISTANCE_POWER = 2;
-const CORRECTION_SNAP_THRESHOLD = 0.05; // If eye position is this close to a correction point, snap to it.
+const CORRECTION_SNAP_THRESHOLD = 0.1; // Increased for more aggressive snapping. If eye position is this close to a correction point, snap to it.
 
 // --- Helper Functions ---
 const mapEyeToScreen = (currentEyePos: { x: number, y: number }, calibrationPoints: CalibrationPointData[]) => {
