@@ -5,11 +5,9 @@ import Icon from './Icon';
 interface StatusDisplayProps {
   mode: Mode;
   onRecalibrate: () => void;
-  sensitivity: number;
-  onSensitivityChange: (value: number) => void;
 }
 
-const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate, sensitivity, onSensitivityChange }) => {
+const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate }) => {
   const getStatusText = () => {
     switch (mode) {
       case Mode.Gaze:
@@ -65,26 +63,6 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate, sens
       </div>
       
       <div className="mt-6 pt-4 border-t border-gray-700 space-y-4">
-        <div>
-            <label htmlFor="sensitivity-slider" className="block text-sm font-medium text-gray-300 mb-2 text-center">
-                Cursor Sensitivity
-            </label>
-            <div className="flex items-center space-x-3">
-                <span className="text-xs text-gray-400">Smooth</span>
-                <input
-                    id="sensitivity-slider"
-                    type="range"
-                    min="0.05"
-                    max="0.4"
-                    step="0.01"
-                    value={sensitivity}
-                    onChange={(e) => onSensitivityChange(parseFloat(e.target.value))}
-                    className="w-full h-2 bg-gray-600 rounded-lg appearance-none cursor-pointer [&::-webkit-slider-thumb]:appearance-none [&::-webkit-slider-thumb]:w-4 [&::-webkit-slider-thumb]:h-4 [&::-webkit-slider-thumb]:bg-cyan-400 [&::-webkit-slider-thumb]:rounded-full [&::-webkit-slider-thumb]:cursor-pointer"
-                    aria-label="Cursor sensitivity slider"
-                />
-                <span className="text-xs text-gray-400">Responsive</span>
-            </div>
-        </div>
         <button
           onClick={onRecalibrate}
           className="w-full flex items-center justify-center px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-semibold transition-colors shadow-md"
