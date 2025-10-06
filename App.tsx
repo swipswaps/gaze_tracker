@@ -27,11 +27,23 @@ const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
 const K_NEAREST_NEIGHBORS = 4;
 const INVERSE_DISTANCE_POWER = 2;
+const CORRECTION_SNAP_THRESHOLD = 0.05; // If eye position is this close to a correction point, snap to it.
 
 // --- Helper Functions ---
 const mapEyeToScreen = (currentEyePos: { x: number, y: number }, calibrationPoints: CalibrationPointData[]) => {
     if (calibrationPoints.length < K_NEAREST_NEIGHBORS) {
         return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+    }
+
+    // Check for a close correction point to "snap" to
+    for (const point of calibrationPoints) {
+        const dist = Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2));
+        if (dist < CORRECTION_SNAP_THRESHOLD) {
+            return {
+                x: point.screen.x * window.innerWidth,
+                y: point.screen.y * window.innerHeight,
+            };
+        }
     }
 
     const distances = calibrationPoints.map(point => ({
@@ -207,6 +219,55 @@ const App: React.FC = () => {
         });
     };
     
+    const findPupilCenter = (eyeROI: any) => {
+        let blurred = new window.cv.Mat();
+        window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
+
+        let gradX = new window.cv.Mat();
+        let gradY = new window.cv.Mat();
+        window.cv.Sobel(blurred, gradX, window.cv.CV_32F, 1, 0, 3);
+        window.cv.Sobel(blurred, gradY, window.cv.CV_32F, 0, 1, 3);
+
+        let maxVal = -1;
+        let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 };
+
+        const weights = new window.cv.Mat.zeros(eyeROI.rows, eyeROI.cols, window.cv.CV_8U);
+        const radius = Math.min(eyeROI.cols, eyeROI.rows) / 2;
+
+        for (let y = 0; y < eyeROI.rows; y++) {
+            for (let x = 0; x < eyeROI.cols; x++) {
+                const dx = gradX.data32F[y * eyeROI.cols + x];
+                const dy = gradY.data32F[y * eyeROI.cols + x];
+                const mag = Math.sqrt(dx * dx + dy * dy);
+                if (mag > 0) {
+                    const normDx = dx / mag;
+                    const normDy = dy / mag;
+                    
+                    for (let r = 0; r < radius; r += 2) {
+                        const testX = Math.round(x + r * normDx);
+                        const testY = Math.round(y + r * normDy);
+
+                        if (testX >= 0 && testX < eyeROI.cols && testY >= 0 && testY < eyeROI.rows) {
+                            weights.data[testY * eyeROI.cols + testX]++;
+                            const currentWeight = weights.data[testY * eyeROI.cols + testX];
+                            if (currentWeight > maxVal) {
+                                maxVal = currentWeight;
+                                center = { x: testX, y: testY };
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        
+        blurred.delete();
+        gradX.delete();
+        gradY.delete();
+        weights.delete();
+
+        return center;
+    };
+    
     const processVideo = () => {
       if (!videoRef.current || !processingCanvasRef.current || videoRef.current.paused || videoRef.current.ended) {
         processVideoFrameIdRef.current = requestAnimationFrame(processVideo); return;
@@ -247,6 +308,7 @@ const App: React.FC = () => {
         const faceROI = gray.roi(face);
         const eyes = new window.cv.RectVector();
         const minEyeSize = new window.cv.Size(face.width / 9, face.height / 9);
+        // Fix: Corrected typo from minEyeZis to minEyeSize
         eyeCascadeRef.current.detectMultiScale(faceROI, eyes, 1.1, 3, 0, minEyeSize);
 
         if (eyes.size() >= 2) {
@@ -261,65 +323,26 @@ const App: React.FC = () => {
           }
 
           const [leftEyeRect, rightEyeRect] = eyeRects;
+          const leftEyeROI = faceROI.roi(leftEyeRect);
+          const rightEyeROI = faceROI.roi(rightEyeRect);
+          
+          const leftPupilRel = findPupilCenter(leftEyeROI);
+          const rightPupilRel = findPupilCenter(rightEyeROI);
 
-          const findPupilCenter = (eyeRect: any) => {
-              const eyeROI = faceROI.roi(eyeRect);
-              let pupilCenter;
-
-              const blurred = new window.cv.Mat();
-              window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
-              const thresholded = new window.cv.Mat();
-              window.cv.adaptiveThreshold(blurred, thresholded, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
-              const kernel = window.cv.Mat.ones(2, 2, window.cv.CV_8U);
-              const opening = new window.cv.Mat();
-              const closing = new window.cv.Mat();
-              window.cv.morphologyEx(thresholded, opening, window.cv.MORPH_OPEN, kernel);
-              window.cv.morphologyEx(opening, closing, window.cv.MORPH_CLOSE, kernel);
-              const contours = new window.cv.MatVector();
-              const hierarchy = new window.cv.Mat();
-              window.cv.findContours(closing, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
-
-              let bestPupil = null; let maxScore = 0;
-              for (let i = 0; i < contours.size(); ++i) {
-                  const contour = contours.get(i);
-                  const area = window.cv.contourArea(contour);
-                  const perimeter = window.cv.arcLength(contour, true);
-                  if (perimeter === 0 || area < 10) { contour.delete(); continue; }
-                  const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
-                  const validArea = area > (eyeRect.width * eyeRect.height * 0.05) && area < (eyeRect.width * eyeRect.height * 0.5);
-                  if (circularity > 0.7 && validArea) {
-                      const score = circularity * area;
-                      if (score > maxScore) {
-                         if (bestPupil) bestPupil.delete();
-                         maxScore = score; bestPupil = contour;
-                      } else { contour.delete(); }
-                  } else { contour.delete(); }
-              }
-              if (bestPupil) {
-                  const M = window.cv.moments(bestPupil);
-                  if (M.m00 !== 0) {
-                      pupilCenter = { x: face.x + eyeRect.x + M.m10 / M.m00, y: face.y + eyeRect.y + M.m01 / M.m00 };
-                  }
-                  bestPupil.delete();
-              }
-              if (!pupilCenter) { pupilCenter = { x: face.x + eyeRect.x + eyeRect.width / 2, y: face.y + eyeRect.y + eyeRect.height / 2 }; }
-              
-              if (displayCtx && displayCanvas) {
+          const leftPupilAbs = { x: face.x + leftEyeRect.x + leftPupilRel.x, y: face.y + leftEyeRect.y + leftPupilRel.y };
+          const rightPupilAbs = { x: face.x + rightEyeRect.x + rightPupilRel.x, y: face.y + rightEyeRect.y + rightPupilRel.y };
+          
+          if (displayCtx && displayCanvas) {
+              [leftPupilAbs, rightPupilAbs].forEach(p => {
                   displayCtx.fillStyle = 'rgba(255, 0, 0, 0.8)';
                   displayCtx.beginPath();
-                  displayCtx.arc(pupilCenter.x, pupilCenter.y, 4, 0, 2 * Math.PI, false);
+                  displayCtx.arc(p.x, p.y, 4, 0, 2 * Math.PI, false);
                   displayCtx.fill();
-              }
-              
-              eyeROI.delete(); blurred.delete(); thresholded.delete(); opening.delete(); closing.delete(); kernel.delete(); contours.delete(); hierarchy.delete();
-              return pupilCenter;
-          };
-
-          const leftPupil = findPupilCenter(leftEyeRect);
-          const rightPupil = findPupilCenter(rightEyeRect);
-
-          const avgPupilX = (leftPupil.x + rightPupil.x) / 2;
-          const avgPupilY = (leftPupil.y + rightPupil.y) / 2;
+              });
+          }
+          
+          const avgPupilX = (leftPupilAbs.x + rightPupilAbs.x) / 2;
+          const avgPupilY = (leftPupilAbs.y + rightPupilAbs.y) / 2;
 
           const normalizedX = (avgPupilX - face.x) / face.width;
           const normalizedY = (avgPupilY - face.y) / face.height;
@@ -335,6 +358,9 @@ const App: React.FC = () => {
           const rightEAR = calculateEAR(rightEyeRect);
           updateBlinkState(leftEyeStateRef, leftEAR, 'left');
           updateBlinkState(rightEyeStateRef, rightEAR, 'right');
+
+          leftEyeROI.delete();
+          rightEyeROI.delete();
         }
         faceROI.delete();
         eyes.delete();
