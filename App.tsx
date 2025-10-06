@@ -127,7 +127,7 @@ const App: React.FC = () => {
       }
     };
     
-    const drawDotsForRect = (ctx: CanvasRenderingContext2D, canvasWidth: number, rect: any, color: string, size: number) => {
+    const drawDotsForRect = (ctx: CanvasRenderingContext2D, rect: any, color: string, size: number) => {
         ctx.fillStyle = color;
         const points = [
             { x: rect.x, y: rect.y }, // top-left
@@ -138,7 +138,7 @@ const App: React.FC = () => {
         ];
         points.forEach(p => {
             ctx.beginPath();
-            ctx.arc(canvasWidth - p.x, p.y, size, 0, 2 * Math.PI);
+            ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
             ctx.fill();
         });
     };
@@ -177,7 +177,7 @@ const App: React.FC = () => {
         const face = faces.get(0);
 
         if (displayCtx && displayCanvas) {
-            drawDotsForRect(displayCtx, displayCanvas.width, face, 'rgba(0, 255, 255, 0.7)', 4); // Cyan dots for face
+            drawDotsForRect(displayCtx, face, 'rgba(0, 255, 255, 0.7)', 4); // Cyan dots for face
         }
 
         const faceROI = gray.roi(face);
@@ -192,7 +192,7 @@ const App: React.FC = () => {
           if (displayCtx && displayCanvas) {
               eyeRects.forEach(eye => {
                    const absoluteEyeRect = { x: face.x + eye.x, y: face.y + eye.y, width: eye.width, height: eye.height };
-                   drawDotsForRect(displayCtx, displayCanvas.width, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3); // Green dots for eyes
+                   drawDotsForRect(displayCtx, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3); // Green dots for eyes
               });
           }
 
@@ -251,7 +251,7 @@ const App: React.FC = () => {
               if (displayCtx && displayCanvas) {
                   displayCtx.fillStyle = 'rgba(255, 0, 0, 0.8)'; // Red dot for pupil
                   displayCtx.beginPath();
-                  displayCtx.arc(displayCanvas.width - pupilCenter.x, pupilCenter.y, 4, 0, 2 * Math.PI, false);
+                  displayCtx.arc(pupilCenter.x, pupilCenter.y, 4, 0, 2 * Math.PI, false);
                   displayCtx.fill();
               }
               
