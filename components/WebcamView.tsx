@@ -1,4 +1,4 @@
-import React, { useEffect, useRef } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 
 interface WebcamViewProps {
@@ -10,8 +10,12 @@ interface WebcamViewProps {
 
 const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, onStreamAcquired }) => {
   const streamAcquiredFiredRef = useRef(false);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    // Reset error state when dependencies change
+    setError(null);
+
     if (isEnabled) {
       const constraints = {
         video: {
@@ -38,7 +42,19 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
         })
         .catch(err => {
           console.error("Error accessing webcam:", err);
-          alert("Could not access webcam. Please ensure permissions are granted and no other application is using it.");
+          let errorMessage = "Could not access webcam. Please ensure it's connected and not in use by another application.";
+          if (err instanceof DOMException) {
+            if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+              errorMessage = "Webcam access was denied. Please grant permission in your browser settings and refresh the page.";
+            } else if (err.name === 'NotFoundError' || err.name === 'DevicesNotFoundError') {
+              errorMessage = "No webcam found. Please connect a camera and try again.";
+            } else if (err.name === 'NotReadableError' || err.name === 'TrackStartError') {
+              errorMessage = "There was a hardware error with your webcam. Another application might be using it.";
+            }
+          }
+          if (active) {
+            setError(errorMessage);
+          }
         });
 
       return () => {
@@ -66,7 +82,7 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
         muted
         className="w-full h-full object-cover transform -scale-x-100"
       />
-      {isEnabled && (
+      {isEnabled && !error && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           {/* Fake tracking indicators to enhance the simulation */}
           <div className="relative w-48 h-24">
@@ -74,6 +90,13 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
             <div className="absolute top-1/2 right-0 -translate-y-1/2 w-8 h-8 border-2 border-cyan-400 rounded-full animate-pulse opacity-80"></div>
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full shadow-lg shadow-red-500/50"></div>
           </div>
+        </div>
+      )}
+      {error && isEnabled && (
+        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gray-800 bg-opacity-90 text-red-400 p-4">
+          <Icon name="camera" className="w-16 h-16 mb-4 opacity-50" />
+          <p className="text-lg font-bold mb-2">Webcam Error</p>
+          <p className="text-center max-w-md">{error}</p>
         </div>
       )}
        {!isEnabled && (
