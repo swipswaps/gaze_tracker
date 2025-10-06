@@ -1,52 +1,14 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
-import GazeCursor from './components/GazeCursor';
 import CalibrationScreen from './components/CalibrationScreen';
-import { Mode, ClickState, CalibrationState, CalibrationPointData, CalibrationMap, BlinkStateMachine } from './types';
+import { ClickState, CalibrationState, CalibrationPointData, CalibrationMap, BlinkStateMachine } from './types';
 import Icon from './components/Icon';
 
 // Extend the Window interface to include the 'cv' property
 declare global {
   interface Window {
     cv: any;
-  }
-}
-
-// --- OneEuroFilter Implementation ---
-function smoothingFactor(t_e: number, cutoff: number): number {
-  const r = 2 * Math.PI * cutoff * t_e;
-  return r / (r + 1);
-}
-
-function exponentialSmoothing(a: number, x: number, x_prev: number): number {
-  return a * x + (1 - a) * x_prev;
-}
-
-class OneEuroFilter {
-  freq: number; min_cutoff: number; beta: number; d_cutoff: number;
-  x_prev: number; dx_prev: number; t_prev: number; firstTime: boolean;
-
-  constructor(freq: number, min_cutoff = 1.0, beta = 0.0, d_cutoff = 1.0) {
-    this.freq = freq; this.min_cutoff = min_cutoff; this.beta = beta; this.d_cutoff = d_cutoff;
-    this.x_prev = 0; this.dx_prev = 0; this.t_prev = 0; this.firstTime = true;
-  }
-
-  filter(x: number, timestamp?: number): number {
-    const t = timestamp || performance.now();
-    if (this.firstTime) {
-      this.firstTime = false; this.t_prev = t; this.x_prev = x; return x;
-    }
-    const t_e = (t - this.t_prev) / 1000;
-    if (t_e <= 0) { return this.x_prev; }
-    const dx = (x - this.x_prev) / t_e;
-    const a_d = smoothingFactor(t_e, this.d_cutoff);
-    const dx_hat = exponentialSmoothing(a_d, dx, this.dx_prev);
-    this.dx_prev = dx_hat;
-    const cutoff = this.min_cutoff + this.beta * Math.abs(dx_hat);
-    const a = smoothingFactor(t_e, cutoff);
-    const x_hat = exponentialSmoothing(a, x, this.x_prev);
-    this.x_prev = x_hat; this.t_prev = t; return x_hat;
   }
 }
 
@@ -69,13 +31,9 @@ const App: React.FC = () => {
   const videoRef = useRef<HTMLVideoElement>(null);
   const processingCanvasRef = useRef<HTMLCanvasElement>(null);
   const displayCanvasRef = useRef<HTMLCanvasElement>(null);
-  const cursorPositionRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const eyePositionRef = useRef({ x: 0.5, y: 0.5 });
   const calibrationMapRef = useRef<CalibrationMap | null>(null);
-  const cursorUpdateFrameIdRef = useRef<number>(0);
   const processVideoFrameIdRef = useRef<number>(0);
-  const filterXRef = useRef(new OneEuroFilter(60, 0.7, 0.3, 1.0));
-  const filterYRef = useRef(new OneEuroFilter(60, 0.7, 0.3, 1.0));
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
   const leftEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
@@ -85,8 +43,6 @@ const App: React.FC = () => {
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
-  const [clickState, setClickState] = useState<ClickState>('none');
-  const [cursorPosition, setCursorPosition] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const [calibrationState, setCalibrationState] = useState<CalibrationState>('notStarted');
   const [calibrationPointIndex, setCalibrationPointIndex] = useState(0);
   const [calibrationData, setCalibrationData] = useState<CalibrationPointData[]>([]);
@@ -160,8 +116,7 @@ const App: React.FC = () => {
       } else if (currentState === 'closed') {
         if (ear >= EAR_THRESHOLD) {
           if (frames > 0 && frames <= BLINK_CLOSED_FRAMES + 3) {
-            setClickState(eyeSide);
-            setTimeout(() => setClickState('none'), 200);
+            console.log(`${eyeSide} blink detected`);
           }
           eyeStateRef.current = { state: 'idle', frames: 0 };
         } else if (frames > BLINK_CLOSED_FRAMES * 5) {
@@ -172,7 +127,7 @@ const App: React.FC = () => {
       }
     };
     
-    const drawDotsForRect = (ctx: CanvasRenderingContext2D, rect: any, color: string, size: number) => {
+    const drawDotsForRect = (ctx: CanvasRenderingContext2D, canvasWidth: number, rect: any, color: string, size: number) => {
         ctx.fillStyle = color;
         const points = [
             { x: rect.x, y: rect.y }, // top-left
@@ -183,7 +138,7 @@ const App: React.FC = () => {
         ];
         points.forEach(p => {
             ctx.beginPath();
-            ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
+            ctx.arc(canvasWidth - p.x, p.y, size, 0, 2 * Math.PI);
             ctx.fill();
         });
     };
@@ -221,8 +176,8 @@ const App: React.FC = () => {
       if (faces.size() > 0) {
         const face = faces.get(0);
 
-        if (displayCtx) {
-            drawDotsForRect(displayCtx, face, 'rgba(0, 255, 255, 0.7)', 4); // Cyan dots for face
+        if (displayCtx && displayCanvas) {
+            drawDotsForRect(displayCtx, displayCanvas.width, face, 'rgba(0, 255, 255, 0.7)', 4); // Cyan dots for face
         }
 
         const faceROI = gray.roi(face);
@@ -234,10 +189,10 @@ const App: React.FC = () => {
           let eyeRects = [eyes.get(0), eyes.get(1)];
           eyeRects.sort((a, b) => a.x - b.x);
           
-          if (displayCtx) {
+          if (displayCtx && displayCanvas) {
               eyeRects.forEach(eye => {
                    const absoluteEyeRect = { x: face.x + eye.x, y: face.y + eye.y, width: eye.width, height: eye.height };
-                   drawDotsForRect(displayCtx, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3); // Green dots for eyes
+                   drawDotsForRect(displayCtx, displayCanvas.width, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3); // Green dots for eyes
               });
           }
 
@@ -293,10 +248,10 @@ const App: React.FC = () => {
                   };
               }
               
-              if (displayCtx) {
+              if (displayCtx && displayCanvas) {
                   displayCtx.fillStyle = 'rgba(255, 0, 0, 0.8)'; // Red dot for pupil
                   displayCtx.beginPath();
-                  displayCtx.arc(pupilCenter.x, pupilCenter.y, 4, 0, 2 * Math.PI, false);
+                  displayCtx.arc(displayCanvas.width - pupilCenter.x, pupilCenter.y, 4, 0, 2 * Math.PI, false);
                   displayCtx.fill();
               }
               
@@ -390,35 +345,6 @@ const App: React.FC = () => {
     }
   }, [calibrationState, calibrationPointIndex, calibrationData]);
 
-  // Cursor Update Loop
-  useEffect(() => {
-    if (calibrationState !== 'finished') return;
-
-    const updateCursor = () => {
-      if (calibrationMapRef.current) {
-        const map = calibrationMapRef.current;
-        if (map.eyeMaxX - map.eyeMinX !== 0 && map.eyeMaxY - map.eyeMinY !== 0) {
-            const { x: rawEyeX, y: rawEyeY } = eyePositionRef.current;
-            const normX = Math.max(0, Math.min(1, (rawEyeX - map.eyeMinX) / (map.eyeMaxX - map.eyeMinX)));
-            const normY = Math.max(0, Math.min(1, (rawEyeY - map.eyeMinY) / (map.eyeMaxY - map.eyeMinY)));
-            const targetX = normX * window.innerWidth;
-            const targetY = normY * window.innerHeight;
-            cursorPositionRef.current = { x: filterXRef.current.filter(targetX), y: filterYRef.current.filter(targetY) };
-            setCursorPosition(cursorPositionRef.current);
-        }
-      }
-      cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
-    };
-    
-    cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
-    
-    return () => { 
-        if (cursorUpdateFrameIdRef.current) { 
-            cancelAnimationFrame(cursorUpdateFrameIdRef.current); 
-        } 
-    };
-  }, [calibrationState]);
-
   // Auto-start calibration
   useEffect(() => {
     if (isWebcamEnabled && videoRef.current && !isCvLoading && !cvError) {
@@ -461,7 +387,6 @@ const App: React.FC = () => {
       </main>
       
       {calibrationState !== 'finished' && <CalibrationScreen state={calibrationState} totalPoints={TOTAL_CALIBRATION_POINTS} currentPointIndex={calibrationPointIndex} pointPosition={CALIBRATION_POINTS[calibrationPointIndex]} />}
-      {calibrationState === 'finished' && <GazeCursor position={cursorPosition} clickState={clickState} />}
     </div>
   );
 };

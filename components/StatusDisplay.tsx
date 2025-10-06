@@ -4,13 +4,13 @@ import Icon from './Icon';
 
 interface StatusDisplayProps {
   calibrationState: CalibrationState;
-  onRecalibrate: () => void;
   cameras: MediaDeviceInfo[];
   selectedCameraId: string;
   onCameraChange: (deviceId: string) => void;
+  onRecalibrate: () => void;
 }
 
-const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, onRecalibrate, cameras, selectedCameraId, onCameraChange }) => {
+const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, cameras, selectedCameraId, onCameraChange, onRecalibrate }) => {
   const getStatusText = () => {
     switch (calibrationState) {
       case 'inProgress':
@@ -38,6 +38,12 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, onRecal
       <h2 className="text-2xl font-bold text-center mb-2">Controls</h2>
       <div className="text-center mb-6">
         <p className={`text-lg font-semibold ${getStatusColor()}`}>{getStatusText()}</p>
+        {/* Fix: Add a button to trigger recalibration, which was missing. */}
+        {calibrationState === 'finished' && (
+          <button onClick={onRecalibrate} className="mt-2 text-sm underline text-cyan-400 hover:text-cyan-300 transition-colors">
+            Recalibrate
+          </button>
+        )}
       </div>
 
       <div className="space-y-4">
@@ -58,7 +64,7 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, onRecal
         </div>
       </div>
       
-      <div className="mt-6 pt-4 border-t border-gray-700 space-y-4">
+      <div className="mt-6 pt-4 border-t border-gray-700">
         {cameras.length > 1 && (
           <div className="space-y-2">
             <label htmlFor="camera-select" className="flex items-center text-sm font-medium text-gray-300">
@@ -79,13 +85,6 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, onRecal
             </select>
           </div>
         )}
-        <button
-          onClick={onRecalibrate}
-          className="w-full flex items-center justify-center px-4 py-2 bg-gray-700 hover:bg-gray-600 rounded-lg text-white font-semibold transition-colors shadow-md"
-        >
-          <Icon name="target" className="w-5 h-5 mr-2" />
-          Recalibrate
-        </button>
       </div>
     </div>
   );
