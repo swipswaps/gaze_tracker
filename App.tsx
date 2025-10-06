@@ -25,6 +25,7 @@ const App: React.FC = () => {
   const [isWebcamEnabled, setIsWebcamEnabled] = useState<boolean>(false);
   const [cursorPosition, setCursorPosition] = useState({ x: 0, y: 0 });
   const [clickState, setClickState] = useState<ClickState>('none');
+  const [sensitivity, setSensitivity] = useState(0.15);
 
   // OpenCV and processing state
   const [isCvReady, setIsCvReady] = useState(false);
@@ -62,11 +63,11 @@ const App: React.FC = () => {
     setCursorPosition(prevPos => {
       const dx = targetPosition.current.x - prevPos.x;
       const dy = targetPosition.current.y - prevPos.y;
-      const newX = prevPos.x + dx * 0.15;
-      const newY = prevPos.y + dy * 0.15;
+      const newX = prevPos.x + dx * sensitivity;
+      const newY = prevPos.y + dy * sensitivity;
       return { x: newX, y: newY };
     });
-  }, []);
+  }, [sensitivity]);
 
   useEffect(() => {
     const script = document.createElement('script');
@@ -302,6 +303,7 @@ const App: React.FC = () => {
   }, [mode, calibrationState]);
 
   const handleEnableWebcam = () => setIsWebcamEnabled(true);
+  
   const handleRecalibrate = () => {
     calibrationData.current = [];
     calibrationMap.current = null;
@@ -313,6 +315,10 @@ const App: React.FC = () => {
         targetPosition.current = center;
         setCursorPosition(center);
     }
+  };
+
+  const handleSensitivityChange = (value: number) => {
+    setSensitivity(value);
   };
   
   const renderOverlay = () => {
@@ -355,7 +361,12 @@ const App: React.FC = () => {
         <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled} />
       </div>
       <div className="w-full h-1/2 md:h-full md:w-1/3 p-4 flex items-center justify-center">
-        <StatusDisplay mode={mode} onRecalibrate={handleRecalibrate} />
+        <StatusDisplay 
+          mode={mode} 
+          onRecalibrate={handleRecalibrate} 
+          sensitivity={sensitivity}
+          onSensitivityChange={handleSensitivityChange}
+        />
       </div>
       {calibrationState === 'finished' && <GazeCursor position={cursorPosition} clickState={clickState} />}
     </div>
