@@ -1,4 +1,3 @@
-
 import React from 'react';
 import { Mode } from '../types';
 import Icon from './Icon';
@@ -30,7 +29,7 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode }) => {
     }
   };
 
-  const instructionBaseClasses = "flex items-center space-x-4 p-4 rounded-lg transition-all duration-300";
+  const instructionBaseClasses = "flex items-start space-x-4 p-4 rounded-lg transition-all duration-300 border";
   const instructionActiveClasses = {
     [Mode.Gaze]: "bg-cyan-500/20 border-cyan-400",
     [Mode.Click]: "bg-lime-500/20 border-lime-400",
@@ -46,7 +45,7 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode }) => {
 
       <div className="space-y-4">
         <div className={`${instructionBaseClasses} ${mode === Mode.Gaze ? instructionActiveClasses[Mode.Gaze] : instructionActiveClasses[Mode.None]}`}>
-          <Icon name="eye" className="w-8 h-8 text-cyan-400 flex-shrink-0" />
+          <Icon name="eye" className="w-8 h-8 text-cyan-400 flex-shrink-0 mt-1" />
           <div>
             <h3 className="font-bold">Gaze Control</h3>
             <p className="text-sm text-gray-400">Press and hold <kbd className="px-2 py-1 text-sm font-semibold text-cyan-300 bg-gray-900 border border-cyan-700 rounded-md">G</kbd> to move the cursor with your gaze.</p>
@@ -54,20 +53,13 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode }) => {
         </div>
         
         <div className={`${instructionBaseClasses} ${mode === Mode.Click ? instructionActiveClasses[Mode.Click] : instructionActiveClasses[Mode.None]}`}>
-          <Icon name="click" className="w-8 h-8 text-lime-400 flex-shrink-0" />
+          <Icon name="click" className="w-8 h-8 text-lime-400 flex-shrink-0 mt-1" />
           <div>
             <h3 className="font-bold">Blink Click</h3>
-            <p className="text-sm text-gray-400">Hold <kbd className="px-2 py-1 text-sm font-semibold text-lime-300 bg-gray-900 border border-lime-700 rounded-md">C</kbd>, then press:</p>
-            <ul className="list-inside text-sm text-gray-400 mt-1">
-              <li><kbd className="px-2 py-1 text-xs font-semibold text-lime-300 bg-gray-900 border border-lime-700 rounded-md">L</kbd> for Left Click</li>
-              <li><kbd className="px-2 py-1 text-xs font-semibold text-lime-300 bg-gray-900 border border-lime-700 rounded-md">R</kbd> for Right Click</li>
-            </ul>
+            <p className="text-sm text-gray-400">Hold <kbd className="px-2 py-1 text-sm font-semibold text-lime-300 bg-gray-900 border border-lime-700 rounded-md">C</kbd> and blink your left or right eye to trigger a corresponding click.</p>
           </div>
         </div>
       </div>
-      <p className="text-xs text-gray-500 text-center mt-6">
-        Note: This is a simulation. The cursor follows your system's mouse pointer for this demo.
-      </p>
     </div>
   );
 };
