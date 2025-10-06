@@ -391,36 +391,33 @@ const App: React.FC = () => {
 
   // Cursor Update Loop
   useEffect(() => {
-    let isCancelled = false;
+    if (calibrationState !== 'finished') return;
+
     const updateCursor = () => {
-      if (isCancelled) return;
-      if (mode === Mode.Gaze && calibrationMapRef.current) {
+      if (modeRef.current === Mode.Gaze && calibrationMapRef.current) {
         const map = calibrationMapRef.current;
         // Ensure map has a valid range to prevent division by zero
-        if (map.eyeMaxX - map.eyeMinX === 0 || map.eyeMaxY - map.eyeMinY === 0) {
-            cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
-            return;
+        if (map.eyeMaxX - map.eyeMinX !== 0 && map.eyeMaxY - map.eyeMinY !== 0) {
+            const { x: rawEyeX, y: rawEyeY } = eyePositionRef.current;
+            const normX = Math.max(0, Math.min(1, (rawEyeX - map.eyeMinX) / (map.eyeMaxX - map.eyeMinX)));
+            const normY = Math.max(0, Math.min(1, (rawEyeY - map.eyeMinY) / (map.eyeMaxY - map.eyeMinY)));
+            const targetX = normX * window.innerWidth;
+            const targetY = normY * window.innerHeight;
+            cursorPositionRef.current = { x: filterXRef.current.filter(targetX), y: filterYRef.current.filter(targetY) };
+            setCursorPosition(cursorPositionRef.current);
         }
-        const { x: rawEyeX, y: rawEyeY } = eyePositionRef.current;
-        const normX = Math.max(0, Math.min(1, (rawEyeX - map.eyeMinX) / (map.eyeMaxX - map.eyeMinX)));
-        const normY = Math.max(0, Math.min(1, (rawEyeY - map.eyeMinY) / (map.eyeMaxY - map.eyeMinY)));
-        const targetX = normX * window.innerWidth;
-        const targetY = normY * window.innerHeight;
-        cursorPositionRef.current = { x: filterXRef.current.filter(targetX), y: filterYRef.current.filter(targetY) };
-        setCursorPosition(cursorPositionRef.current);
       }
       cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
     };
-    if (calibrationState === 'finished') { // Start loop after calibration, check for mode inside
-      cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
-    }
+    
+    cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
+    
     return () => { 
-        isCancelled = true;
         if (cursorUpdateFrameIdRef.current) { 
             cancelAnimationFrame(cursorUpdateFrameIdRef.current); 
         } 
     };
-  }, [calibrationState, mode]);
+  }, [calibrationState]);
 
   // Keyboard controls
   useEffect(() => {
