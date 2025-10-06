@@ -19,3 +19,8 @@ export interface CalibrationMap {
   eyeMinY: number;
   eyeMaxY: number;
 }
+
+export interface BlinkStateMachine {
+  state: 'idle' | 'closing' | 'closed';
+  frames: number;
+}
