@@ -1,7 +1,7 @@
 import React from 'react';
 
 interface IconProps {
-  name: 'camera' | 'mouse' | 'keyboard' | 'eye' | 'click';
+  name: 'camera' | 'mouse' | 'keyboard' | 'eye' | 'click' | 'target';
   className?: string;
 }
 
@@ -34,6 +34,13 @@ const Icon: React.FC<IconProps> = ({ name, className = 'w-6 h-6' }) => {
     click: (
       <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
         <path strokeLinecap="round" strokeLinejoin="round" d="M15.042 21.672L13.684 16.6m0 0l-2.51 2.225.569-9.47 5.227 7.917-3.286-.672zm-7.518-.267A8.25 8.25 0 1120.25 10.5M8.288 14.212A5.25 5.25 0 1117.25 10.5" />
+      </svg>
+    ),
+    target: (
+      <svg xmlns="http://www.w3.org/2000/svg" fill="none" viewBox="0 0 24 24" strokeWidth={1.5} stroke="currentColor" className={className}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 21a9 9 0 100-18 9 9 0 000 18z" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 3.75v3.75m0 7.5V12m0 0h3.75m-3.75 0H8.25" />
+        <path strokeLinecap="round" strokeLinejoin="round" d="M12 12.75a.75.75 0 100-1.5.75.75 0 000 1.5z" />
       </svg>
     ),
   };

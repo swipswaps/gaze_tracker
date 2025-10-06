@@ -1,8 +1,9 @@
 import React, { useState, useRef, useEffect, useCallback } from 'react';
-import { Mode, ClickState } from './types';
+import { Mode, ClickState, CalibrationState, CalibrationPointData, CalibrationMap } from './types';
 import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
 import GazeCursor from './components/GazeCursor';
+import CalibrationScreen from './components/CalibrationScreen';
 
 // Declare cv on window
 declare global {
@@ -10,6 +11,14 @@ declare global {
     cv: any;
   }
 }
+
+const CALIBRATION_POINTS = [
+  { x: 0.1, y: 0.1 }, // Top-left
+  { x: 0.9, y: 0.1 }, // Top-right
+  { x: 0.5, y: 0.5 }, // Center
+  { x: 0.1, y: 0.9 }, // Bottom-left
+  { x: 0.9, y: 0.9 }, // Bottom-right
+];
 
 const App: React.FC = () => {
   const [mode, setMode] = useState<Mode>(Mode.None);
@@ -21,6 +30,12 @@ const App: React.FC = () => {
   const [isCvReady, setIsCvReady] = useState(false);
   const [classifiersLoaded, setClassifiersLoaded] = useState(false);
   const [cvError, setCvError] = useState<string | null>(null);
+
+  // Calibration state
+  const [calibrationState, setCalibrationState] = useState<CalibrationState>('notStarted');
+  const [currentPointIndex, setCurrentPointIndex] = useState(0);
+  const calibrationData = useRef<CalibrationPointData[]>([]);
+  const calibrationMap = useRef<CalibrationMap | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
@@ -41,21 +56,18 @@ const App: React.FC = () => {
   const rightEyeBlinked = useRef(false);
   const leftEyeOpen = useRef(true);
   const rightEyeOpen = useRef(true);
-  // FIX: Changed NodeJS.Timeout to ReturnType<typeof setTimeout> for browser compatibility.
   const blinkTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
 
-  // Smooth cursor movement animation
   const smoothMove = useCallback(() => {
     setCursorPosition(prevPos => {
       const dx = targetPosition.current.x - prevPos.x;
       const dy = targetPosition.current.y - prevPos.y;
-      const newX = prevPos.x + dx * 0.15; // Increased smoothing factor
+      const newX = prevPos.x + dx * 0.15;
       const newY = prevPos.y + dy * 0.15;
       return { x: newX, y: newY };
     });
   }, []);
 
-  // Effect to load OpenCV.js script
   useEffect(() => {
     const script = document.createElement('script');
     script.src = 'https://docs.opencv.org/4.9.0/opencv.js';
@@ -70,16 +82,11 @@ const App: React.FC = () => {
       };
       checkCv();
     };
-    script.onerror = () => {
-      setCvError("Failed to load OpenCV.js. Please check your internet connection.");
-    };
+    script.onerror = () => setCvError("Failed to load OpenCV.js. Please check your internet connection.");
     document.body.appendChild(script);
-    return () => {
-      document.body.removeChild(script);
-    };
+    return () => { document.body.removeChild(script); };
   }, []);
 
-  // Effect to load Haar Cascade classifiers
   useEffect(() => {
     if (!isCvReady) return;
     const loadClassifiers = async () => {
@@ -108,13 +115,65 @@ const App: React.FC = () => {
     loadClassifiers();
   }, [isCvReady]);
 
-  // Core video processing logic for gaze and blink detection
-  const processVideo = useCallback(() => {
-    if (!videoRef.current || !containerRef.current || videoRef.current.videoWidth === 0) return;
+  // Calibration process
+  useEffect(() => {
+    if (calibrationState !== 'inProgress' || !classifiersLoaded || !isWebcamEnabled) return;
+  
+    const processPoint = async () => {
+      if (currentPointIndex >= CALIBRATION_POINTS.length) {
+        // Finish calibration
+        const map: CalibrationMap = {
+          eyeMinX: Math.min(...calibrationData.current.map(d => d.eye.x)),
+          eyeMaxX: Math.max(...calibrationData.current.map(d => d.eye.x)),
+          eyeMinY: Math.min(...calibrationData.current.map(d => d.eye.y)),
+          eyeMaxY: Math.max(...calibrationData.current.map(d => d.eye.y)),
+        };
+        // Add a small buffer to avoid division by zero and overly sensitive edges
+        map.eyeMaxX += 0.01; map.eyeMinX -= 0.01;
+        map.eyeMaxY += 0.01; map.eyeMinY -= 0.01;
+
+        calibrationMap.current = map;
+        setCalibrationState('finished');
+        return;
+      }
+  
+      // Capture data for the current point
+      setTimeout(() => {
+        const eyeReadings: { x: number; y: number }[] = [];
+        const captureInterval = setInterval(() => {
+          const eyePos = processVideo(true); // Run in data capture mode
+          if (eyePos) eyeReadings.push(eyePos);
+        }, 100);
+  
+        setTimeout(() => {
+          clearInterval(captureInterval);
+          if (eyeReadings.length > 0) {
+            const avgEyePos = eyeReadings.reduce((acc, pos) => ({ x: acc.x + pos.x, y: acc.y + pos.y }), { x: 0, y: 0 });
+            avgEyePos.x /= eyeReadings.length;
+            avgEyePos.y /= eyeReadings.length;
+            calibrationData.current.push({
+              screen: CALIBRATION_POINTS[currentPointIndex],
+              eye: avgEyePos,
+            });
+          } else {
+            // If no eyes were detected, push a default based on point to avoid crash
+            console.warn(`No eye data for point ${currentPointIndex}. Using default.`);
+            const defaultEyePos = { x: CALIBRATION_POINTS[currentPointIndex].x, y: CALIBRATION_POINTS[currentPointIndex].y };
+            calibrationData.current.push({ screen: CALIBRATION_POINTS[currentPointIndex], eye: defaultEyePos });
+          }
+          setCurrentPointIndex(i => i + 1);
+        }, 1000);
+      }, 2000); // Wait for user to focus
+    };
+  
+    processPoint();
+  }, [calibrationState, currentPointIndex, classifiersLoaded, isWebcamEnabled]);
+
+  const processVideo = useCallback((captureOnly = false) => {
+    if (!videoRef.current || videoRef.current.videoWidth === 0) return null;
 
     const video = videoRef.current;
     const { videoWidth, videoHeight } = video;
-    const containerRect = containerRef.current.getBoundingClientRect();
 
     if (!cap.current) cap.current = new window.cv.VideoCapture(video);
     if (!frame.current) frame.current = new window.cv.Mat(videoHeight, videoWidth, window.cv.CV_8UC4);
@@ -139,36 +198,46 @@ const App: React.FC = () => {
           return { x: face.x + eyeRect.x, y: face.y + eyeRect.y, width: eyeRect.width, height: eyeRect.height };
         }).sort((a, b) => a.x - b.x);
 
+        // Blink detection logic (unchanged)
         const isLeftEyeDetected = detectedEyes.some(eye => eye.x + eye.width / 2 < face.x + face.width / 2);
         const isRightEyeDetected = detectedEyes.some(eye => eye.x + eye.width / 2 > face.x + face.width / 2);
-
         if (leftEyeOpen.current && !isLeftEyeDetected) leftEyeBlinked.current = true;
         leftEyeOpen.current = isLeftEyeDetected;
-
         if (rightEyeOpen.current && !isRightEyeDetected) rightEyeBlinked.current = true;
         rightEyeOpen.current = isRightEyeDetected;
 
-        if (mode === Mode.Click) {
-          if (blinkTimeout.current) clearTimeout(blinkTimeout.current);
-          if (leftEyeBlinked.current) setClickState('left');
-          if (rightEyeBlinked.current) setClickState('right');
-          leftEyeBlinked.current = false;
-          rightEyeBlinked.current = false;
-          blinkTimeout.current = setTimeout(() => setClickState('none'), 150);
-        } else {
-          leftEyeBlinked.current = false;
-          rightEyeBlinked.current = false;
-        }
-
-        if (mode === Mode.Gaze && detectedEyes.length > 0) {
+        if (detectedEyes.length > 0) {
           const centerPoint = detectedEyes.reduce((acc, eye) => ({ x: acc.x + eye.x + eye.width / 2, y: acc.y + eye.y + eye.height / 2 }), {x: 0, y: 0});
-          const avgEyeX = centerPoint.x / detectedEyes.length;
-          const avgEyeY = centerPoint.y / detectedEyes.length;
+          const avgEyeX = (centerPoint.x / detectedEyes.length) / videoWidth;
+          const avgEyeY = (centerPoint.y / detectedEyes.length) / videoHeight;
+
+          if (captureOnly) return { x: avgEyeX, y: avgEyeY };
           
-          targetPosition.current = {
-            x: containerRect.width * (1 - (avgEyeX / videoWidth)), // Flipped X for mirrored video
-            y: containerRect.height * (avgEyeY / videoHeight)
-          };
+          if (mode === Mode.Click) {
+            if (blinkTimeout.current) clearTimeout(blinkTimeout.current);
+            if (leftEyeBlinked.current) setClickState('left');
+            if (rightEyeBlinked.current) setClickState('right');
+            leftEyeBlinked.current = false;
+            rightEyeBlinked.current = false;
+            blinkTimeout.current = setTimeout(() => setClickState('none'), 150);
+          } else {
+            leftEyeBlinked.current = false;
+            rightEyeBlinked.current = false;
+          }
+
+          if (mode === Mode.Gaze && calibrationMap.current && containerRef.current) {
+            const { eyeMinX, eyeMaxX, eyeMinY, eyeMaxY } = calibrationMap.current;
+            const normX = (avgEyeX - eyeMinX) / (eyeMaxX - eyeMinX);
+            const normY = (avgEyeY - eyeMinY) / (eyeMaxY - eyeMinY);
+            
+            const finalX = 1 - Math.max(0, Math.min(1, normX)); // Flip for mirror
+            const finalY = Math.max(0, Math.min(1, normY));
+            
+            targetPosition.current = {
+              x: containerRef.current.clientWidth * finalX,
+              y: containerRef.current.clientHeight * finalY
+            };
+          }
         }
         faceRoiGray.delete();
       } else {
@@ -178,30 +247,22 @@ const App: React.FC = () => {
     } catch (err) {
       console.error("OpenCV processing error:", err);
     }
+    return null;
   }, [mode]);
 
-  // Main loop combining video processing and cursor animation
   const mainLoop = useCallback(() => {
-    processVideo();
-    smoothMove();
+    if (calibrationState === 'finished') {
+      processVideo();
+      smoothMove();
+    }
     animationFrameId.current = requestAnimationFrame(mainLoop);
-  }, [processVideo, smoothMove]);
+  }, [processVideo, smoothMove, calibrationState]);
 
   useEffect(() => {
     if (isWebcamEnabled && classifiersLoaded) {
-      // Set initial cursor to center
-      if (containerRef.current) {
-        const rect = containerRef.current.getBoundingClientRect();
-        const center = { x: rect.width / 2, y: rect.height / 2 };
-        targetPosition.current = center;
-        setCursorPosition(center);
-      }
       animationFrameId.current = requestAnimationFrame(mainLoop);
     } else {
-      if (animationFrameId.current) {
-        cancelAnimationFrame(animationFrameId.current);
-        animationFrameId.current = null;
-      }
+      if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
     }
     return () => {
       if (animationFrameId.current) cancelAnimationFrame(animationFrameId.current);
@@ -209,15 +270,15 @@ const App: React.FC = () => {
     };
   }, [isWebcamEnabled, classifiersLoaded, mainLoop]);
   
-  // Keyboard event handlers
   useEffect(() => {
     const handleKeyDown = (event: KeyboardEvent) => {
-      if (event.repeat) return;
+      if (event.repeat || calibrationState !== 'finished') return;
       const key = event.key.toLowerCase();
       if (key === 'g') setMode(Mode.Gaze);
       else if (key === 'c') setMode(Mode.Click);
     };
     const handleKeyUp = (event: KeyboardEvent) => {
+      if (calibrationState !== 'finished') return;
       const key = event.key.toLowerCase();
       if (key === 'g' && mode === Mode.Gaze) setMode(Mode.None);
       else if (key === 'c' && mode === Mode.Click) {
@@ -231,9 +292,26 @@ const App: React.FC = () => {
       window.removeEventListener('keydown', handleKeyDown);
       window.removeEventListener('keyup', handleKeyUp);
     };
-  }, [mode]);
+  }, [mode, calibrationState]);
 
   const handleEnableWebcam = () => setIsWebcamEnabled(true);
+  const handleStartCalibration = () => {
+    if (classifiersLoaded) {
+      setCalibrationState('inProgress');
+    }
+  };
+  const handleRecalibrate = () => {
+    calibrationData.current = [];
+    calibrationMap.current = null;
+    setCurrentPointIndex(0);
+    setCalibrationState('notStarted');
+    setMode(Mode.None);
+    if (containerRef.current) {
+        const center = { x: containerRef.current.clientWidth / 2, y: containerRef.current.clientHeight / 2 };
+        targetPosition.current = center;
+        setCursorPosition(center);
+    }
+  };
   
   const renderOverlay = () => {
     if (cvError) return (
@@ -243,7 +321,7 @@ const App: React.FC = () => {
       </div>
     );
     if (!isWebcamEnabled) return (
-      <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center z-20">
+      <div className="absolute inset-0 bg-black bg-opacity-70 flex flex-col items-center justify-center z-20 p-4">
         <h1 className="text-4xl font-bold mb-4">Webcam Gaze Tracker</h1>
         <p className="text-lg mb-8 max-w-lg text-center">This application uses your webcam to control an on-screen cursor with your eyes. Enable your webcam to begin.</p>
         <button onClick={handleEnableWebcam} className="px-6 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white font-semibold transition-colors shadow-lg">
@@ -253,10 +331,19 @@ const App: React.FC = () => {
     );
     if (!classifiersLoaded) return (
        <div className="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-20">
-          <h2 className="text-2xl font-bold mb-4 animate-pulse">Initializing AI Gaze Tracker...</h2>
+          <h2 className="text-2xl font-bold mb-4 animate-pulse">Initializing AI...</h2>
           <p className="text-gray-300">Loading models, this may take a moment.</p>
        </div>
     );
+    if (calibrationState !== 'finished') return (
+      <CalibrationScreen
+        state={calibrationState}
+        onStart={handleStartCalibration}
+        totalPoints={CALIBRATION_POINTS.length}
+        currentPointIndex={currentPointIndex}
+        pointPosition={CALIBRATION_POINTS[currentPointIndex]}
+      />
+    )
     return null;
   };
 
@@ -267,9 +354,9 @@ const App: React.FC = () => {
         <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled} />
       </div>
       <div className="w-full h-1/2 md:h-full md:w-1/3 p-4 flex items-center justify-center">
-        <StatusDisplay mode={mode} />
+        <StatusDisplay mode={mode} onRecalibrate={handleRecalibrate} />
       </div>
-      {isWebcamEnabled && classifiersLoaded && <GazeCursor position={cursorPosition} clickState={clickState} />}
+      {calibrationState === 'finished' && <GazeCursor position={cursorPosition} clickState={clickState} />}
     </div>
   );
 };
