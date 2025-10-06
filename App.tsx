@@ -19,18 +19,21 @@ const EAR_THRESHOLD = 0.25;
 const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
 const K_NEAREST_NEIGHBORS = 4;
-const INVERSE_DISTANCE_POWER = 2;
-const CORRECTION_SNAP_THRESHOLD = 0.1; // If eye position is this close to a correction point, snap to it.
+const INVERSE_DISTANCE_POWER = 4; // Increased power for more impactful corrections
+const CORRECTION_SNAP_THRESHOLD = 0.1; 
+const CAMERA_STORAGE_KEY = 'gazeTrack-selectedCameraId';
 
 // --- Helper Functions ---
 const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoints: CalibrationPointData[]) => {
     if (correctionPoints.length < K_NEAREST_NEIGHBORS) {
-        // Not enough data to map, return center or a very basic mapping
         if (correctionPoints.length > 0) {
-            // Fallback to the first available point if not enough for KNN
+            // Fallback to the last available point if not enough for KNN
+            const lastPoint = correctionPoints[correctionPoints.length - 1];
+            const xOffset = currentEyePos.x - lastPoint.eye.x;
+            const yOffset = currentEyePos.y - lastPoint.eye.y;
             return {
-                x: correctionPoints[0].screen.x * window.innerWidth,
-                y: correctionPoints[0].screen.y * window.innerHeight,
+                x: (lastPoint.screen.x + xOffset) * window.innerWidth,
+                y: (lastPoint.screen.y + yOffset) * window.innerHeight,
             };
         }
         return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
@@ -104,7 +107,7 @@ const App: React.FC = () => {
   // State
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
-  const [selectedCameraId, setSelectedCameraId] = useState<string>('');
+  const [selectedCameraId, setSelectedCameraId] = useState<string>(() => localStorage.getItem(CAMERA_STORAGE_KEY) || '');
   const [correctionData, setCorrectionData] = useState<CalibrationPointData[]>([]);
   const [isCvLoading, setIsCvLoading] = useState(true);
   const [cvError, setCvError] = useState<string | null>(null);
@@ -119,6 +122,13 @@ const App: React.FC = () => {
   useEffect(() => {
     correctionDataRef.current = correctionData;
   }, [correctionData]);
+
+  // Save selected camera to local storage
+  useEffect(() => {
+    if (selectedCameraId) {
+      localStorage.setItem(CAMERA_STORAGE_KEY, selectedCameraId);
+    }
+  }, [selectedCameraId]);
 
   const triggerClick = useCallback((side: 'left' | 'right') => {
     setClickState(side);
@@ -217,57 +227,20 @@ const App: React.FC = () => {
     
     const findPupilCenter = (eyeROI: any) => {
         let blurred = new window.cv.Mat();
-        let thresholded = new window.cv.Mat();
-        let contours = new window.cv.MatVector();
-        let hierarchy = new window.cv.Mat();
-        let kernel = window.cv.Mat.ones(3, 3, window.cv.CV_8U);
-        let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 };
+        let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 }; // Default to center
 
         try {
-            window.cv.medianBlur(eyeROI, blurred, 5);
-            window.cv.adaptiveThreshold(blurred, thresholded, 255, window.cv.ADAPTIVE_THRESH_MEAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
-            window.cv.erode(thresholded, thresholded, kernel, new window.cv.Point(-1, -1), 1);
-            window.cv.dilate(thresholded, thresholded, kernel, new window.cv.Point(-1, -1), 2);
-            window.cv.findContours(thresholded, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
-
-            let bestPupil = null;
-            let maxCircularity = 0;
-            const minArea = (eyeROI.rows * eyeROI.cols) * 0.05;
-            const maxArea = (eyeROI.rows * eyeROI.cols) * 0.5;
-
-            for (let i = 0; i < contours.size(); ++i) {
-                const contour = contours.get(i);
-                const area = window.cv.contourArea(contour);
-                const perimeter = window.cv.arcLength(contour, true);
-                
-                if (area > minArea && area < maxArea && perimeter > 0) {
-                    const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
-                    if (circularity > 0.6) {
-                        if (circularity > maxCircularity) {
-                            maxCircularity = circularity;
-                            bestPupil = contour.clone();
-                        }
-                    }
-                }
-                contour.delete();
-            }
-
-            if (bestPupil) {
-                const M = window.cv.moments(bestPupil, false);
-                if (M.m00 !== 0) {
-                    center.x = M.m10 / M.m00;
-                    center.y = M.m01 / M.m00;
-                }
-                bestPupil.delete();
-            }
+            // Use a heavy blur to smooth out details and find the general dark area
+            // Kernel size must be odd
+            window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(15, 15), 0);
+            
+            // Find the location of the minimum pixel value (the darkest spot)
+            const result = window.cv.minMaxLoc(blurred);
+            center = result.minLoc;
         } catch(e) {
             console.error("Error in findPupilCenter:", e);
         } finally {
             blurred.delete();
-            thresholded.delete();
-            contours.delete();
-            hierarchy.delete();
-            kernel.delete();
         }
         
         return center;
@@ -388,17 +361,21 @@ const App: React.FC = () => {
       const devices = await navigator.mediaDevices.enumerateDevices();
       const videoDevices = devices.filter(device => device.kind === 'videoinput');
       setCameras(videoDevices);
+      
       if (videoDevices.length > 0) {
-        const currentTrack = stream.getVideoTracks()[0];
-        const currentDeviceId = currentTrack.getSettings().deviceId;
-        if (currentDeviceId && videoDevices.some(d => d.deviceId === currentDeviceId)) {
-             setSelectedCameraId(currentDeviceId);
-        } else {
+        const storedCameraId = localStorage.getItem(CAMERA_STORAGE_KEY);
+        const storedCameraExists = videoDevices.some(d => d.deviceId === storedCameraId);
+
+        if (!storedCameraExists && selectedCameraId) {
+            // The previously selected camera is gone, switch to the first available one
+            setSelectedCameraId(videoDevices[0].deviceId);
+        } else if (!selectedCameraId) {
+             // This is the first run, or storage was empty
              setSelectedCameraId(videoDevices[0].deviceId);
         }
       }
     } catch (err) { console.error("Error enumerating devices:", err); }
-  }, []);
+  }, [selectedCameraId]);
 
   const handleCameraChange = (deviceId: string) => {
     if (deviceId !== selectedCameraId) { 
