@@ -19,57 +19,41 @@ const EAR_THRESHOLD = 0.25;
 const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
 const K_NEAREST_NEIGHBORS = 4;
-const INVERSE_DISTANCE_POWER = 4; // Increased power for more impactful corrections
-const CORRECTION_SNAP_THRESHOLD = 0.1; 
+const INVERSE_DISTANCE_POWER = 4;
 const CAMERA_STORAGE_KEY = 'gazeTrack-selectedCameraId';
 
 // --- Helper Functions ---
 const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoints: CalibrationPointData[]) => {
+    // Fallback if we don't have enough points for the algorithm
     if (correctionPoints.length < K_NEAREST_NEIGHBORS) {
         if (correctionPoints.length > 0) {
-            // Fallback to the last available point if not enough for KNN
             const lastPoint = correctionPoints[correctionPoints.length - 1];
             const xOffset = currentEyePos.x - lastPoint.eye.x;
             const yOffset = currentEyePos.y - lastPoint.eye.y;
             return {
-                x: (lastPoint.screen.x + xOffset) * window.innerWidth,
-                y: (lastPoint.screen.y + yOffset) * window.innerHeight,
+                x: (lastPoint.screen.x * window.innerWidth) + (xOffset * window.innerWidth),
+                y: (lastPoint.screen.y * window.innerHeight) + (yOffset * window.innerHeight),
             };
         }
         return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     }
 
-    // Check for a close correction point to "snap" to
-    for (const point of correctionPoints) {
-        const dist = Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2));
-        if (dist < CORRECTION_SNAP_THRESHOLD) {
-            return {
-                x: point.screen.x * window.innerWidth,
-                y: point.screen.y * window.innerHeight,
-            };
-        }
-    }
-
+    // Find the K-Nearest Neighbors based on eye position
     const distances = correctionPoints.map(point => ({
         ...point,
         dist: Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2))
     }));
-
     distances.sort((a, b) => a.dist - b.dist);
     const nearestNeighbors = distances.slice(0, K_NEAREST_NEIGHBORS);
 
     let totalWeight = 0;
-    let weightedScreenX = 0;
-    let weightedScreenY = 0;
     const epsilon = 1e-9;
-
-    nearestNeighbors.forEach(neighbor => {
-        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
-        totalWeight += weight;
-        weightedScreenX += neighbor.screen.x * weight;
-        weightedScreenY += neighbor.screen.y * weight;
-    });
     
+    // Calculate total weight (used for both position and error)
+    nearestNeighbors.forEach(neighbor => {
+        totalWeight += 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
+    });
+
     if (totalWeight === 0) {
        return { 
            x: nearestNeighbors[0].screen.x * window.innerWidth,
@@ -77,16 +61,33 @@ const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoint
        };
     }
 
-    const finalScreenX = weightedScreenX / totalWeight;
-    const finalScreenY = weightedScreenY / totalWeight;
-    
-    const clampedX = Math.max(0, Math.min(1, finalScreenX));
-    const clampedY = Math.max(0, Math.min(1, finalScreenY));
+    // Pass 1: Calculate the base screen position using weighted average
+    let weightedScreenX = 0;
+    let weightedScreenY = 0;
+    nearestNeighbors.forEach(neighbor => {
+        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
+        weightedScreenX += neighbor.screen.x * weight;
+        weightedScreenY += neighbor.screen.y * weight;
+    });
+    const baseScreenX = (weightedScreenX / totalWeight) * window.innerWidth;
+    const baseScreenY = (weightedScreenY / totalWeight) * window.innerHeight;
 
-    return {
-        x: clampedX * window.innerWidth,
-        y: clampedY * window.innerHeight,
-    };
+    // Pass 2: Calculate the error offset using a weighted average of stored error vectors
+    let weightedErrorX = 0;
+    let weightedErrorY = 0;
+    nearestNeighbors.forEach(neighbor => {
+        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
+        weightedErrorX += neighbor.error.x * weight;
+        weightedErrorY += neighbor.error.y * weight;
+    });
+    const errorOffsetX = weightedErrorX / totalWeight;
+    const errorOffsetY = weightedErrorY / totalWeight;
+
+    // Final Position: Base prediction + learned error correction
+    const finalX = baseScreenX + errorOffsetX;
+    const finalY = baseScreenY + errorOffsetY;
+
+    return { x: finalX, y: finalY };
 };
 
 
@@ -103,6 +104,7 @@ const App: React.FC = () => {
   const rightEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
   const targetPositionRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const correctionDataRef = useRef<CalibrationPointData[]>([]);
+  const smoothedCursorPosRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
 
   // State
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
@@ -115,7 +117,6 @@ const App: React.FC = () => {
   const [clickState, setClickState] = useState<ClickState>('none');
   const [isCorrectionMode, setIsCorrectionMode] = useState(false);
   const [correctionFeedback, setCorrectionFeedback] = useState(false);
-  const [correctionClickPos, setCorrectionClickPos] = useState<{x: number; y: number} | null>(null);
 
 
   // Sync state to refs for use in RAF loop
@@ -407,38 +408,53 @@ const App: React.FC = () => {
   const handleCorrectionClick = useCallback((event: React.MouseEvent<HTMLDivElement>) => {
     if (!isCorrectionMode) return;
 
-    const newScreenPoint = {
-      x: event.clientX / window.innerWidth,
-      y: event.clientY / window.innerHeight,
+    const actualClickPos = { x: event.clientX, y: event.clientY };
+    const predictedPos = cursorPosition; // Position before the click
+    
+    const errorVector = { 
+        x: actualClickPos.x - predictedPos.x,
+        y: actualClickPos.y - predictedPos.y
     };
-    const newEyePoint = { ...eyePositionRef.current };
+
+    const newCorrectionPoint: CalibrationPointData = {
+        screen: {
+            x: actualClickPos.x / window.innerWidth,
+            y: actualClickPos.y / window.innerHeight,
+        },
+        eye: { ...eyePositionRef.current },
+        error: errorVector,
+    };
     
-    setCorrectionData(prev => [...prev, { screen: newScreenPoint, eye: newEyePoint }]);
+    setCorrectionData(prev => [...prev, newCorrectionPoint]);
     
-    setCorrectionClickPos({ x: event.clientX, y: event.clientY });
+    // Instantly move the cursor to the corrected position and track from there
+    targetPositionRef.current = actualClickPos;
+    smoothedCursorPosRef.current = actualClickPos;
+    setCursorPosition(actualClickPos);
+
+    // Trigger a brief visual flash to confirm the correction
     setCorrectionFeedback(true);
     setTimeout(() => {
         setCorrectionFeedback(false);
-        setCorrectionClickPos(null);
     }, 200);
 
-  }, [isCorrectionMode]);
+  }, [isCorrectionMode, cursorPosition]);
 
   // Smooth cursor movement loop
   useEffect(() => {
     if (isCvLoading || cvError) return;
 
     let animationFrameId: number;
-    const smoothedCursorPos = { x: window.innerWidth / 2, y: window.innerHeight / 2 };
 
     const updateCursor = () => {
         const target = targetPositionRef.current;
+        const smoothedPos = smoothedCursorPosRef.current;
 
         // Simple linear interpolation (lerp) for smoothing
-        smoothedCursorPos.x += (target.x - smoothedCursorPos.x) * 0.15;
-        smoothedCursorPos.y += (target.y - smoothedCursorPos.y) * 0.15;
+        smoothedPos.x += (target.x - smoothedPos.x) * 0.15;
+        smoothedPos.y += (target.y - smoothedPos.y) * 0.15;
         
-        setCursorPosition({ x: smoothedCursorPos.x, y: smoothedCursorPos.y });
+        setCursorPosition({ x: smoothedPos.x, y: smoothedPos.y });
         
         animationFrameId = requestAnimationFrame(updateCursor);
     };
@@ -479,7 +495,7 @@ const App: React.FC = () => {
         <StatusDisplay isCvLoading={isCvLoading} onClearCorrections={handleClearCorrections} cameras={cameras} selectedCameraId={selectedCameraId} onCameraChange={handleCameraChange} />
       </main>
       
-      {!isCvLoading && !cvError && <GazeCursor position={cursorPosition} clickState={clickState} isCorrectionMode={isCorrectionMode} correctionFeedback={correctionFeedback} correctionClickPos={correctionClickPos}/>}
+      {!isCvLoading && !cvError && <GazeCursor position={cursorPosition} clickState={clickState} isCorrectionMode={isCorrectionMode} correctionFeedback={correctionFeedback} />}
     </div>
   );
 };

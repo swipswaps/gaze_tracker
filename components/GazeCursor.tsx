@@ -7,10 +7,9 @@ interface GazeCursorProps {
   clickState: ClickState;
   isCorrectionMode: boolean;
   correctionFeedback: boolean;
-  correctionClickPos: { x: number; y: number } | null;
 }
 
-const GazeCursor: React.FC<GazeCursorProps> = ({ position, clickState, isCorrectionMode, correctionFeedback, correctionClickPos }) => {
+const GazeCursor: React.FC<GazeCursorProps> = ({ position, clickState, isCorrectionMode, correctionFeedback }) => {
   const baseClasses = 'absolute w-8 h-8 rounded-full border-2 transform -translate-x-1/2 -translate-y-1/2 pointer-events-none transition-all duration-150';
 
   const getCursorStyle = () => {
@@ -31,7 +30,7 @@ const GazeCursor: React.FC<GazeCursorProps> = ({ position, clickState, isCorrect
     }
   };
   
-  const currentPos = correctionFeedback && correctionClickPos ? correctionClickPos : position;
+  const currentPos = position;
 
   return (
     <div
