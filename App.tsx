@@ -18,64 +18,51 @@ const EYE_CASCADE_URL = 'https://raw.githubusercontent.com/opencv/opencv/4.x/dat
 const EAR_THRESHOLD = 0.25;
 const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
-const K_NEAREST_NEIGHBORS = 4;
-const INVERSE_DISTANCE_POWER = 2;
+const MIN_CORRECTION_POINTS_FOR_MODEL = 6; // Need at least 6 points to solve for the 6 coefficients in the model
 const CAMERA_STORAGE_KEY = 'gazeTrack-selectedCameraId';
 
-// --- Helper Functions ---
-const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoints: CalibrationPointData[]) => {
-    if (correctionPoints.length === 0) {
-        // Default to center if no corrections have been made
-        return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
+// --- Linear Algebra Helper for Polynomial Regression ---
+// Solves Ax = B for x, where A is a matrix
+const solve = (A: number[][], B: number[]): number[] | null => {
+    const n = A.length;
+    for (let i = 0; i < n; i++) {
+        let maxEl = Math.abs(A[i][i]);
+        let maxRow = i;
+        for (let k = i + 1; k < n; k++) {
+            if (Math.abs(A[k][i]) > maxEl) {
+                maxEl = Math.abs(A[k][i]);
+                maxRow = k;
+            }
+        }
+
+        for (let k = i; k < n; k++) {
+            [A[maxRow][k], A[i][k]] = [A[i][k], A[maxRow][k]];
+        }
+        [B[maxRow], B[i]] = [B[i], B[maxRow]];
+
+        for (let k = i + 1; k < n; k++) {
+            const c = -A[k][i] / A[i][i];
+            for (let j = i; j < n; j++) {
+                if (i === j) {
+                    A[k][j] = 0;
+                } else {
+                    A[k][j] += c * A[i][j];
+                }
+            }
+            B[k] += c * B[i];
+        }
     }
-    
-    // If there are few points, use a simpler model based on the last correction
-    if (correctionPoints.length < K_NEAREST_NEIGHBORS) {
-        const lastPoint = correctionPoints[correctionPoints.length - 1];
-        const xOffset = currentEyePos.x - lastPoint.eye.x;
-        const yOffset = currentEyePos.y - lastPoint.eye.y;
-        // The multiplier here acts as a sensitivity setting
-        const sensitivity = 2.5;
-        return {
-            x: (lastPoint.screen.x * window.innerWidth) + (xOffset * window.innerWidth * sensitivity),
-            y: (lastPoint.screen.y * window.innerHeight) + (yOffset * window.innerHeight * sensitivity),
-        };
+
+    const x = new Array(n).fill(0);
+    for (let i = n - 1; i > -1; i--) {
+        if (Math.abs(A[i][i]) < 1e-9) return null; // No unique solution
+        x[i] = B[i] / A[i][i];
+        for (let k = i - 1; k > -1; k--) {
+            B[k] -= A[k][i] * x[i];
+        }
     }
-
-    // K-Nearest Neighbors Inverse Distance Weighting
-    const distances = correctionPoints.map(point => ({
-        ...point,
-        dist: Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2))
-    }));
-    distances.sort((a, b) => a.dist - b.dist);
-    const nearestNeighbors = distances.slice(0, K_NEAREST_NEIGHBORS);
-
-    let totalWeight = 0;
-    let weightedScreenX = 0;
-    let weightedScreenY = 0;
-    const epsilon = 1e-9; // To prevent division by zero
-
-    nearestNeighbors.forEach(neighbor => {
-        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
-        weightedScreenX += neighbor.screen.x * weight;
-        weightedScreenY += neighbor.screen.y * weight;
-        totalWeight += weight;
-    });
-
-    if (totalWeight === 0) {
-       // Fallback to the absolute closest neighbor if weights sum to zero
-       return { 
-           x: nearestNeighbors[0].screen.x * window.innerWidth,
-           y: nearestNeighbors[0].screen.y * window.innerHeight
-       };
-    }
-    
-    const finalX = (weightedScreenX / totalWeight) * window.innerWidth;
-    const finalY = (weightedScreenY / totalWeight) * window.innerHeight;
-
-    return { x: finalX, y: finalY };
+    return x;
 };
-
 
 const App: React.FC = () => {
   // Refs
@@ -88,10 +75,10 @@ const App: React.FC = () => {
   const eyeCascadeRef = useRef<any>(null);
   const leftEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
   const rightEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
-  const targetPositionRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const modelCoefficientsRef = useRef<{ x: number[], y: number[] } | null>(null);
   const correctionDataRef = useRef<CalibrationPointData[]>([]);
   const smoothedCursorPosRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
-
+  
   // State
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
@@ -105,7 +92,7 @@ const App: React.FC = () => {
   const [correctionFeedback, setCorrectionFeedback] = useState(false);
 
 
-  // Sync state to refs for use in RAF loop
+  // Sync state to ref for use in RAF loop
   useEffect(() => {
     correctionDataRef.current = correctionData;
   }, [correctionData]);
@@ -121,9 +108,7 @@ const App: React.FC = () => {
   useEffect(() => {
     const initCameras = async () => {
       try {
-        // We need to get a stream once to get permission to enumerate devices
         const stream = await navigator.mediaDevices.getUserMedia({ video: true });
-        // Stop the tracks immediately, we don't need to show this stream
         stream.getTracks().forEach(track => track.stop());
 
         const devices = await navigator.mediaDevices.enumerateDevices();
@@ -137,7 +122,6 @@ const App: React.FC = () => {
             if (storedCameraExists) {
                 setSelectedCameraId(storedCameraId!);
             } else {
-                // If stored camera is not found or none was stored, default to the first one
                 setSelectedCameraId(videoDevices[0].deviceId);
             }
         }
@@ -153,6 +137,41 @@ const App: React.FC = () => {
     setClickState(side);
     setTimeout(() => setClickState('none'), 200); // Visual feedback duration
   }, []);
+
+  // Train the polynomial regression model whenever correction data changes
+  useEffect(() => {
+    if (correctionData.length < MIN_CORRECTION_POINTS_FOR_MODEL) {
+        modelCoefficientsRef.current = null;
+        return;
+    }
+
+    const n = correctionData.length;
+    // We are fitting screen_x = c0 + c1*eye_x + c2*eye_y + c3*eye_x*eye_y + c4*eye_x^2 + c5*eye_y^2
+    const designMatrix = correctionData.map(p => [1, p.eye.x, p.eye.y, p.eye.x * p.eye.y, p.eye.x * p.eye.x, p.eye.y * p.eye.y]);
+    
+    // Transpose of the design matrix
+    const designMatrixT = designMatrix[0].map((_, colIndex) => designMatrix.map(row => row[colIndex]));
+
+    // (X^T * X)
+    const XtX = designMatrixT.map(row => designMatrix[0].map((_, colIndex) => row.reduce((sum, val, rowIndex) => sum + val * designMatrix[rowIndex][colIndex], 0)));
+
+    // (X^T * y)
+    const screenX_values = correctionData.map(p => p.screen.x);
+    const screenY_values = correctionData.map(p => p.screen.y);
+    const XtY_x = designMatrixT.map(row => row.reduce((sum, val, i) => sum + val * screenX_values[i], 0));
+    const XtY_y = designMatrixT.map(row => row.reduce((sum, val, i) => sum + val * screenY_values[i], 0));
+    
+    // Solve (X^T * X) * b = (X^T * y) for b
+    const coeffsX = solve(XtX.map(row => [...row]), [...XtY_x]);
+    const coeffsY = solve(XtX.map(row => [...row]), [...XtY_y]);
+
+    if (coeffsX && coeffsY) {
+        modelCoefficientsRef.current = { x: coeffsX, y: coeffsY };
+    } else {
+        modelCoefficientsRef.current = null;
+    }
+
+  }, [correctionData]);
 
   // Load OpenCV and classifiers
   useEffect(() => {
@@ -237,11 +256,11 @@ const App: React.FC = () => {
     const drawDotsForRect = (ctx: CanvasRenderingContext2D, rect: any, color: string, size: number) => {
         ctx.fillStyle = color;
         const points = [
-            { x: rect.x, y: rect.y }, // top-left
-            { x: rect.x + rect.width, y: rect.y }, // top-right
-            { x: rect.x, y: rect.y + rect.height }, // bottom-left
-            { x: rect.x + rect.width, y: rect.y + rect.height }, // bottom-right
-            { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, // center
+            { x: rect.x, y: rect.y },
+            { x: rect.x + rect.width, y: rect.y },
+            { x: rect.x, y: rect.y + rect.height },
+            { x: rect.x + rect.width, y: rect.y + rect.height },
+            { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 },
         ];
         points.forEach(p => {
             ctx.beginPath();
@@ -251,27 +270,62 @@ const App: React.FC = () => {
     };
     
     const findPupilCenter = (eyeROI: any) => {
-        let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 };
-        const blurred = new window.cv.Mat();
-        const ksize = new window.cv.Size(15, 15); // Kernel size must be odd
-        
+        const binary = new window.cv.Mat();
+        const contours = new window.cv.MatVector();
+        const hierarchy = new window.cv.Mat();
+        let pupilCenter = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 };
+
         try {
-            // Heavy blur smooths out reflections and details
-            window.cv.GaussianBlur(eyeROI, blurred, ksize, 0, 0, window.cv.BORDER_DEFAULT);
+            // Adaptive threshold to get a binary image. This is robust to lighting changes.
+            window.cv.adaptiveThreshold(eyeROI, binary, 255, window.cv.ADAPTIVE_THRESH_GAUSSIAN_C, window.cv.THRESH_BINARY_INV, 11, 2);
 
-            // Find the darkest spot in the blurred image, which corresponds to the pupil
-            const minMax = window.cv.minMaxLoc(blurred);
-            center = { x: minMax.minLoc.x, y: minMax.minLoc.y };
+            // Morphological operations to remove noise (like eyelashes and reflections)
+            const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(3, 3));
+            window.cv.erode(binary, binary, kernel, new window.cv.Point(-1, -1), 1);
+            window.cv.dilate(binary, binary, kernel, new window.cv.Point(-1, -1), 2);
 
+            // Find contours
+            window.cv.findContours(binary, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
+
+            let bestCandidate = null;
+            let maxCircularity = 0;
+
+            for (let i = 0; i < contours.size(); ++i) {
+                const contour = contours.get(i);
+                const area = window.cv.contourArea(contour);
+                const perimeter = window.cv.arcLength(contour, true);
+                
+                // Filter by area to avoid tiny noise or the whole eye
+                if (area < 50 || area > eyeROI.cols * eyeROI.rows * 0.5) continue;
+
+                // Calculate circularity
+                const circularity = (4 * Math.PI * area) / (perimeter * perimeter);
+                if (circularity > 0.6 && circularity > maxCircularity) { // Pupils are mostly circular
+                    bestCandidate = contour;
+                    maxCircularity = circularity;
+                }
+            }
+
+            if (bestCandidate) {
+                const M = window.cv.moments(bestCandidate);
+                if (M.m00 !== 0) {
+                    pupilCenter = {
+                        x: M.m10 / M.m00,
+                        y: M.m01 / M.m00,
+                    };
+                }
+                bestCandidate.delete();
+            }
         } catch(e) {
             console.error("Error in findPupilCenter:", e);
         } finally {
-            blurred.delete();
+            binary.delete();
+            contours.delete();
+            hierarchy.delete();
         }
         
-        return center;
+        return pupilCenter;
     };
-
     
     const processVideo = () => {
       if (!videoRef.current || !processingCanvasRef.current || videoRef.current.paused || videoRef.current.ended) {
@@ -353,8 +407,22 @@ const App: React.FC = () => {
           
           eyePositionRef.current = { x: avgNormalizedX, y: avgNormalizedY };
           
-          const newTarget = mapEyeToScreen(eyePositionRef.current, correctionDataRef.current);
-          targetPositionRef.current = newTarget;
+          // Use the trained model to predict screen position
+          const model = modelCoefficientsRef.current;
+          if (model) {
+              const { x: ex, y: ey } = eyePositionRef.current;
+              const [c0x, c1x, c2x, c3x, c4x, c5x] = model.x;
+              const [c0y, c1y, c2y, c3y, c4y, c5y] = model.y;
+
+              const screenX = c0x + c1x*ex + c2x*ey + c3x*ex*ey + c4x*ex*ex + c5x*ey*ey;
+              const screenY = c0y + c1y*ex + c2y*ey + c3y*ex*ey + c4y*ex*ex + c5y*ey*ey;
+
+              smoothedCursorPosRef.current = {
+                  x: screenX * window.innerWidth,
+                  y: screenY * window.innerHeight
+              };
+          }
+          // If no model, cursor doesn't move based on gaze until trained.
 
           const leftEAR = calculateEAR(leftEyeRect);
           const rightEAR = calculateEAR(rightEyeRect);
@@ -425,11 +493,9 @@ const App: React.FC = () => {
     setCorrectionData(prev => [...prev, newCorrectionPoint]);
     
     // Instantly move the cursor to the corrected position and track from there
-    targetPositionRef.current = actualClickPos;
     smoothedCursorPosRef.current = actualClickPos;
     setCursorPosition(actualClickPos);
 
-    // Trigger a brief visual flash to confirm the correction
     setCorrectionFeedback(true);
     setTimeout(() => {
         setCorrectionFeedback(false);
@@ -440,24 +506,18 @@ const App: React.FC = () => {
   // Smooth cursor movement loop
   useEffect(() => {
     if (isCvLoading || cvError) return;
-
     let animationFrameId: number;
-
     const updateCursor = () => {
-        const target = targetPositionRef.current;
-        const smoothedPos = smoothedCursorPosRef.current;
-
-        // Simple linear interpolation (lerp) for smoothing
-        smoothedPos.x += (target.x - smoothedPos.x) * 0.15;
-        smoothedPos.y += (target.y - smoothedPos.y) * 0.15;
-        
-        setCursorPosition({ x: smoothedPos.x, y: smoothedPos.y });
-        
+        setCursorPosition(prev => {
+            const target = smoothedCursorPosRef.current;
+            // Lerp for smoothing
+            const newX = prev.x + (target.x - prev.x) * 0.2;
+            const newY = prev.y + (target.y - prev.y) * 0.2;
+            return { x: newX, y: newY };
+        });
         animationFrameId = requestAnimationFrame(updateCursor);
     };
-
     animationFrameId = requestAnimationFrame(updateCursor);
-
     return () => cancelAnimationFrame(animationFrameId);
   }, [isCvLoading, cvError]);
 
