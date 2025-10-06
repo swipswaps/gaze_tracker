@@ -74,12 +74,13 @@ const App: React.FC = () => {
   const calibrationMapRef = useRef<CalibrationMap | null>(null);
   const cursorUpdateFrameIdRef = useRef<number>(0);
   const processVideoFrameIdRef = useRef<number>(0);
-  const filterXRef = useRef(new OneEuroFilter(60, 1.5, 0.5, 1.0));
-  const filterYRef = useRef(new OneEuroFilter(60, 1.5, 0.5, 1.0));
+  const filterXRef = useRef(new OneEuroFilter(60, 0.7, 0.3, 1.0));
+  const filterYRef = useRef(new OneEuroFilter(60, 0.7, 0.3, 1.0));
   const faceCascadeRef = useRef<any>(null);
   const eyeCascadeRef = useRef<any>(null);
   const leftEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
   const rightEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
+  const modeRef = useRef<Mode>(Mode.None);
 
   // State
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
@@ -93,6 +94,11 @@ const App: React.FC = () => {
   const [calibrationData, setCalibrationData] = useState<CalibrationPointData[]>([]);
   const [isCvLoading, setIsCvLoading] = useState(true);
   const [cvError, setCvError] = useState<string | null>(null);
+
+  // Keep a ref to the current mode to avoid stale closures in the animation frame loop
+  useEffect(() => {
+    modeRef.current = mode;
+  }, [mode]);
 
   // Load OpenCV and classifiers
   useEffect(() => {
@@ -161,7 +167,7 @@ const App: React.FC = () => {
       } else if (currentState === 'closed') {
         if (ear >= EAR_THRESHOLD) {
           if (frames > 0 && frames <= BLINK_CLOSED_FRAMES + 3) {
-            if (mode === Mode.Click) {
+            if (modeRef.current === Mode.Click) {
               setClickState(eyeSide);
               setTimeout(() => setClickState('none'), 200);
             }
@@ -204,7 +210,6 @@ const App: React.FC = () => {
       const faces = new window.cv.RectVector();
       const minFaceSize = new window.cv.Size(video.videoWidth / 6, video.videoHeight / 6);
       faceCascadeRef.current.detectMultiScale(gray, faces, 1.1, 3, 0, minFaceSize);
-      minFaceSize.delete();
 
       if (faces.size() > 0) {
         const face = faces.get(0);
@@ -219,11 +224,9 @@ const App: React.FC = () => {
         const eyes = new window.cv.RectVector();
         const minEyeSize = new window.cv.Size(face.width / 9, face.height / 9);
         eyeCascadeRef.current.detectMultiScale(faceROI, eyes, 1.1, 3, 0, minEyeSize);
-        minEyeSize.delete();
 
         if (eyes.size() >= 2) {
           let eyeRects = [eyes.get(0), eyes.get(1)];
-          // Sort eyes by x-coordinate to distinguish left from right
           eyeRects.sort((a, b) => a.x - b.x);
           
           if (displayCtx) {
@@ -234,19 +237,89 @@ const App: React.FC = () => {
               });
           }
 
-          const [leftEye, rightEye] = eyeRects;
-          
-          const avgEyeX = (leftEye.x + leftEye.width / 2 + rightEye.x + rightEye.width / 2) / 2;
-          const avgEyeY = (leftEye.y + leftEye.height / 2 + rightEye.y + rightEye.height / 2) / 2;
-          
-          // Normalize based on face ROI, not whole frame, for stability
-          const normalizedX = avgEyeX / face.width;
-          const normalizedY = avgEyeY / face.height;
-          
-          eyePositionRef.current = { x: 1 - normalizedX, y: normalizedY }; // Mirrored view
+          const [leftEyeRect, rightEyeRect] = eyeRects;
 
-          const leftEAR = calculateEAR(leftEye);
-          const rightEAR = calculateEAR(rightEye);
+          const findPupilCenter = (eyeRect: any) => {
+              const eyeROI = faceROI.roi(eyeRect);
+              
+              // New pupil detection logic
+              let pupilCenter;
+              const blurred = new window.cv.Mat();
+              window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
+              
+              const meanScalar = window.cv.mean(blurred);
+              const thresholdValue = meanScalar[0] * 0.7; // Dynamic threshold
+              
+              const thresholded = new window.cv.Mat();
+              window.cv.threshold(blurred, thresholded, thresholdValue, 255, window.cv.THRESH_BINARY_INV);
+              
+              const contours = new window.cv.MatVector();
+              const hierarchy = new window.cv.Mat();
+              window.cv.findContours(thresholded, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
+
+              let bestPupil = null;
+              let maxArea = 0;
+
+              for (let i = 0; i < contours.size(); ++i) {
+                  const contour = contours.get(i);
+                  const area = window.cv.contourArea(contour);
+                  if (area > 10 && area > maxArea) {
+                      if (bestPupil) bestPupil.delete();
+                      maxArea = area;
+                      bestPupil = contour;
+                  } else {
+                      contour.delete();
+                  }
+              }
+
+              if (bestPupil) {
+                  const M = window.cv.moments(bestPupil);
+                  if (M.m00 !== 0) {
+                      pupilCenter = {
+                          x: face.x + eyeRect.x + M.m10 / M.m00,
+                          y: face.y + eyeRect.y + M.m01 / M.m00
+                      };
+                  }
+                  bestPupil.delete();
+              }
+              
+              if (!pupilCenter) {
+                  // Fallback to center of eye rectangle
+                  pupilCenter = {
+                      x: face.x + eyeRect.x + eyeRect.width / 2,
+                      y: face.y + eyeRect.y + eyeRect.height / 2
+                  };
+              }
+              
+              if (displayCtx) {
+                  displayCtx.fillStyle = 'rgba(255, 0, 0, 0.8)'; // Red dot for pupil
+                  displayCtx.beginPath();
+                  displayCtx.arc(pupilCenter.x, pupilCenter.y, 3, 0, 2 * Math.PI, false);
+                  displayCtx.fill();
+              }
+              
+              // Cleanup
+              eyeROI.delete();
+              blurred.delete();
+              thresholded.delete();
+              contours.delete();
+              hierarchy.delete();
+              return pupilCenter;
+          };
+
+          const leftPupil = findPupilCenter(leftEyeRect);
+          const rightPupil = findPupilCenter(rightEyeRect);
+
+          const avgPupilX = (leftPupil.x + rightPupil.x) / 2;
+          const avgPupilY = (leftPupil.y + rightPupil.y) / 2;
+
+          const normalizedX = (avgPupilX - face.x) / face.width;
+          const normalizedY = (avgPupilY - face.y) / face.height;
+          
+          eyePositionRef.current = { x: 1 - normalizedX, y: normalizedY };
+
+          const leftEAR = calculateEAR(leftEyeRect);
+          const rightEAR = calculateEAR(rightEyeRect);
           updateBlinkState(leftEyeStateRef, leftEAR, 'left');
           updateBlinkState(rightEyeStateRef, rightEAR, 'right');
         }
@@ -265,7 +338,7 @@ const App: React.FC = () => {
       cancelAnimationFrame(processVideoFrameIdRef.current);
     };
 
-  }, [isCvLoading, cvError, mode]);
+  }, [isCvLoading, cvError]);
   
   // Handlers
   const handleStreamAcquired = useCallback(async (stream: MediaStream) => {
@@ -318,7 +391,9 @@ const App: React.FC = () => {
 
   // Cursor Update Loop
   useEffect(() => {
+    let isCancelled = false;
     const updateCursor = () => {
+      if (isCancelled) return;
       if (mode === Mode.Gaze && calibrationMapRef.current) {
         const map = calibrationMapRef.current;
         // Ensure map has a valid range to prevent division by zero
@@ -339,8 +414,13 @@ const App: React.FC = () => {
     if (calibrationState === 'finished') { // Start loop after calibration, check for mode inside
       cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
     }
-    return () => { if (cursorUpdateFrameIdRef.current) { cancelAnimationFrame(cursorUpdateFrameIdRef.current); } };
-  }, [calibrationState]);
+    return () => { 
+        isCancelled = true;
+        if (cursorUpdateFrameIdRef.current) { 
+            cancelAnimationFrame(cursorUpdateFrameIdRef.current); 
+        } 
+    };
+  }, [calibrationState, mode]);
 
   // Keyboard controls
   useEffect(() => {
