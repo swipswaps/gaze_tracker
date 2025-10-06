@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
@@ -19,26 +20,28 @@ const EAR_THRESHOLD = 0.25;
 const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
 const K_NEAREST_NEIGHBORS = 4;
-const INVERSE_DISTANCE_POWER = 4;
+const INVERSE_DISTANCE_POWER = 2; // Reduced power for smoother interpolation
 const CAMERA_STORAGE_KEY = 'gazeTrack-selectedCameraId';
 
 // --- Helper Functions ---
 const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoints: CalibrationPointData[]) => {
-    // Fallback if we don't have enough points for the algorithm
-    if (correctionPoints.length < K_NEAREST_NEIGHBORS) {
-        if (correctionPoints.length > 0) {
-            const lastPoint = correctionPoints[correctionPoints.length - 1];
-            const xOffset = currentEyePos.x - lastPoint.eye.x;
-            const yOffset = currentEyePos.y - lastPoint.eye.y;
-            return {
-                x: (lastPoint.screen.x * window.innerWidth) + (xOffset * window.innerWidth),
-                y: (lastPoint.screen.y * window.innerHeight) + (yOffset * window.innerHeight),
-            };
-        }
+    // If we have no data, default to the center
+    if (correctionPoints.length === 0) {
         return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     }
+    
+    // If we don't have enough points for KNN, use a simpler model (e.g., follow the last point)
+    if (correctionPoints.length < K_NEAREST_NEIGHBORS) {
+        const lastPoint = correctionPoints[correctionPoints.length - 1];
+        const xOffset = currentEyePos.x - lastPoint.eye.x;
+        const yOffset = currentEyePos.y - lastPoint.eye.y;
+        return {
+            x: (lastPoint.screen.x * window.innerWidth) + (xOffset * window.innerWidth),
+            y: (lastPoint.screen.y * window.innerHeight) + (yOffset * window.innerHeight),
+        };
+    }
 
-    // Find the K-Nearest Neighbors based on eye position
+    // Find the K-Nearest Neighbors based on eye position in the normalized eye space
     const distances = correctionPoints.map(point => ({
         ...point,
         dist: Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2))
@@ -47,45 +50,29 @@ const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoint
     const nearestNeighbors = distances.slice(0, K_NEAREST_NEIGHBORS);
 
     let totalWeight = 0;
-    const epsilon = 1e-9;
-    
-    // Calculate total weight (used for both position and error)
+    let weightedScreenX = 0;
+    let weightedScreenY = 0;
+    const epsilon = 1e-9; // To avoid division by zero if a point is identical
+
+    // Calculate weighted average of screen positions
     nearestNeighbors.forEach(neighbor => {
-        totalWeight += 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
+        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
+        weightedScreenX += neighbor.screen.x * weight;
+        weightedScreenY += neighbor.screen.y * weight;
+        totalWeight += weight;
     });
 
+    // Handle case where totalWeight is zero (should be rare with epsilon)
     if (totalWeight === 0) {
        return { 
            x: nearestNeighbors[0].screen.x * window.innerWidth,
            y: nearestNeighbors[0].screen.y * window.innerHeight
        };
     }
-
-    // Pass 1: Calculate the base screen position using weighted average
-    let weightedScreenX = 0;
-    let weightedScreenY = 0;
-    nearestNeighbors.forEach(neighbor => {
-        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
-        weightedScreenX += neighbor.screen.x * weight;
-        weightedScreenY += neighbor.screen.y * weight;
-    });
-    const baseScreenX = (weightedScreenX / totalWeight) * window.innerWidth;
-    const baseScreenY = (weightedScreenY / totalWeight) * window.innerHeight;
-
-    // Pass 2: Calculate the error offset using a weighted average of stored error vectors
-    let weightedErrorX = 0;
-    let weightedErrorY = 0;
-    nearestNeighbors.forEach(neighbor => {
-        const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
-        weightedErrorX += neighbor.error.x * weight;
-        weightedErrorY += neighbor.error.y * weight;
-    });
-    const errorOffsetX = weightedErrorX / totalWeight;
-    const errorOffsetY = weightedErrorY / totalWeight;
-
-    // Final Position: Base prediction + learned error correction
-    const finalX = baseScreenX + errorOffsetX;
-    const finalY = baseScreenY + errorOffsetY;
+    
+    // Final Position is the weighted average
+    const finalX = (weightedScreenX / totalWeight) * window.innerWidth;
+    const finalY = (weightedScreenY / totalWeight) * window.innerHeight;
 
     return { x: finalX, y: finalY };
 };
@@ -409,12 +396,6 @@ const App: React.FC = () => {
     if (!isCorrectionMode) return;
 
     const actualClickPos = { x: event.clientX, y: event.clientY };
-    const predictedPos = cursorPosition; // Position before the click
-    
-    const errorVector = { 
-        x: actualClickPos.x - predictedPos.x,
-        y: actualClickPos.y - predictedPos.y
-    };
 
     const newCorrectionPoint: CalibrationPointData = {
         screen: {
@@ -422,7 +403,6 @@ const App: React.FC = () => {
             y: actualClickPos.y / window.innerHeight,
         },
         eye: { ...eyePositionRef.current },
-        error: errorVector,
     };
     
     setCorrectionData(prev => [...prev, newCorrectionPoint]);
@@ -438,7 +418,7 @@ const App: React.FC = () => {
         setCorrectionFeedback(false);
     }, 200);
 
-  }, [isCorrectionMode, cursorPosition]);
+  }, [isCorrectionMode]);
 
   // Smooth cursor movement loop
   useEffect(() => {
