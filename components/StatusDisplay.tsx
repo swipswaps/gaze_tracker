@@ -38,7 +38,6 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, cameras
       <h2 className="text-2xl font-bold text-center mb-2">Controls</h2>
       <div className="text-center mb-6">
         <p className={`text-lg font-semibold ${getStatusColor()}`}>{getStatusText()}</p>
-        {/* Fix: Add a button to trigger recalibration, which was missing. */}
         {calibrationState === 'finished' && (
           <button onClick={onRecalibrate} className="mt-2 text-sm underline text-cyan-400 hover:text-cyan-300 transition-colors">
             Recalibrate
@@ -60,6 +59,14 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, cameras
           <div>
             <h3 className="font-bold">Blink Click</h3>
             <p className="text-sm text-gray-400">Blink your left or right eye to trigger a click.</p>
+          </div>
+        </div>
+
+        <div className="flex items-start space-x-4 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
+          <Icon name="plus" className="w-8 h-8 text-yellow-400 flex-shrink-0 mt-1" />
+          <div>
+            <h3 className="font-bold">Live Correction</h3>
+            <p className="text-sm text-gray-400">Hold <kbd className="px-2 py-1 text-xs font-semibold text-gray-800 bg-gray-200 border border-gray-300 rounded-md">Shift</kbd> and click anywhere to refine tracking accuracy.</p>
           </div>
         </div>
       </div>
