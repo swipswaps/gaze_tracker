@@ -115,6 +115,13 @@ const App: React.FC = () => {
     loadClassifiers();
   }, [isCvReady]);
 
+  // Auto-start calibration when ready
+  useEffect(() => {
+    if (isWebcamEnabled && classifiersLoaded && calibrationState === 'notStarted') {
+      setCalibrationState('inProgress');
+    }
+  }, [isWebcamEnabled, classifiersLoaded, calibrationState]);
+
   // Calibration process
   useEffect(() => {
     if (calibrationState !== 'inProgress' || !classifiersLoaded || !isWebcamEnabled) return;
@@ -295,11 +302,6 @@ const App: React.FC = () => {
   }, [mode, calibrationState]);
 
   const handleEnableWebcam = () => setIsWebcamEnabled(true);
-  const handleStartCalibration = () => {
-    if (classifiersLoaded) {
-      setCalibrationState('inProgress');
-    }
-  };
   const handleRecalibrate = () => {
     calibrationData.current = [];
     calibrationMap.current = null;
@@ -338,7 +340,6 @@ const App: React.FC = () => {
     if (calibrationState !== 'finished') return (
       <CalibrationScreen
         state={calibrationState}
-        onStart={handleStartCalibration}
         totalPoints={CALIBRATION_POINTS.length}
         currentPointIndex={currentPointIndex}
         pointPosition={CALIBRATION_POINTS[currentPointIndex]}

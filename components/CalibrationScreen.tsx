@@ -3,7 +3,6 @@ import { CalibrationState } from '../types';
 
 interface CalibrationScreenProps {
   state: CalibrationState;
-  onStart: () => void;
   totalPoints: number;
   currentPointIndex: number;
   pointPosition?: { x: number; y: number };
@@ -11,7 +10,6 @@ interface CalibrationScreenProps {
 
 const CalibrationScreen: React.FC<CalibrationScreenProps> = ({
   state,
-  onStart,
   totalPoints,
   currentPointIndex,
   pointPosition,
@@ -33,16 +31,10 @@ const CalibrationScreen: React.FC<CalibrationScreenProps> = ({
   if (state === 'notStarted') {
     return (
       <div className="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-20 p-4 text-center">
-        <h2 className="text-3xl font-bold mb-4">Calibration Required</h2>
-        <p className="text-lg text-gray-300 max-w-md mb-8">
-          To ensure accurate gaze tracking, please complete a quick calibration process. Look at each point as it appears on the screen.
+        <h2 className="text-3xl font-bold mb-4 animate-pulse">Preparing Calibration</h2>
+        <p className="text-lg text-gray-300 max-w-md">
+          Please wait, the system is preparing for eye tracking calibration.
         </p>
-        <button
-          onClick={onStart}
-          className="px-8 py-3 bg-indigo-600 hover:bg-indigo-500 rounded-lg text-white font-semibold transition-colors shadow-lg text-lg"
-        >
-          Start Calibration
-        </button>
       </div>
     );
   }
