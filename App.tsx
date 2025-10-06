@@ -80,13 +80,11 @@ const App: React.FC = () => {
   const eyeCascadeRef = useRef<any>(null);
   const leftEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
   const rightEyeStateRef = useRef<BlinkStateMachine>({ state: 'idle', frames: 0 });
-  const modeRef = useRef<Mode>(Mode.None);
 
   // State
   const [isWebcamEnabled, setIsWebcamEnabled] = useState(true);
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
   const [selectedCameraId, setSelectedCameraId] = useState<string>('');
-  const [mode, setMode] = useState<Mode>(Mode.None);
   const [clickState, setClickState] = useState<ClickState>('none');
   const [cursorPosition, setCursorPosition] = useState({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const [calibrationState, setCalibrationState] = useState<CalibrationState>('notStarted');
@@ -94,11 +92,6 @@ const App: React.FC = () => {
   const [calibrationData, setCalibrationData] = useState<CalibrationPointData[]>([]);
   const [isCvLoading, setIsCvLoading] = useState(true);
   const [cvError, setCvError] = useState<string | null>(null);
-
-  // Keep a ref to the current mode to avoid stale closures in the animation frame loop
-  useEffect(() => {
-    modeRef.current = mode;
-  }, [mode]);
 
   // Load OpenCV and classifiers
   useEffect(() => {
@@ -167,10 +160,8 @@ const App: React.FC = () => {
       } else if (currentState === 'closed') {
         if (ear >= EAR_THRESHOLD) {
           if (frames > 0 && frames <= BLINK_CLOSED_FRAMES + 3) {
-            if (modeRef.current === Mode.Click) {
-              setClickState(eyeSide);
-              setTimeout(() => setClickState('none'), 200);
-            }
+            setClickState(eyeSide);
+            setTimeout(() => setClickState('none'), 200);
           }
           eyeStateRef.current = { state: 'idle', frames: 0 };
         } else if (frames > BLINK_CLOSED_FRAMES * 5) {
@@ -179,6 +170,22 @@ const App: React.FC = () => {
           eyeStateRef.current.frames++;
         }
       }
+    };
+    
+    const drawDotsForRect = (ctx: CanvasRenderingContext2D, rect: any, color: string, size: number) => {
+        ctx.fillStyle = color;
+        const points = [
+            { x: rect.x, y: rect.y }, // top-left
+            { x: rect.x + rect.width, y: rect.y }, // top-right
+            { x: rect.x, y: rect.y + rect.height }, // bottom-left
+            { x: rect.x + rect.width, y: rect.y + rect.height }, // bottom-right
+            { x: rect.x + rect.width / 2, y: rect.y + rect.height / 2 }, // center
+        ];
+        points.forEach(p => {
+            ctx.beginPath();
+            ctx.arc(p.x, p.y, size, 0, 2 * Math.PI);
+            ctx.fill();
+        });
     };
     
     const processVideo = () => {
@@ -215,9 +222,7 @@ const App: React.FC = () => {
         const face = faces.get(0);
 
         if (displayCtx) {
-            displayCtx.strokeStyle = 'rgba(0, 255, 255, 0.8)'; // Cyan for face
-            displayCtx.lineWidth = 4;
-            displayCtx.strokeRect(face.x, face.y, face.width, face.height);
+            drawDotsForRect(displayCtx, face, 'rgba(0, 255, 255, 0.7)', 4); // Cyan dots for face
         }
 
         const faceROI = gray.roi(face);
@@ -230,10 +235,9 @@ const App: React.FC = () => {
           eyeRects.sort((a, b) => a.x - b.x);
           
           if (displayCtx) {
-              displayCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)'; // Green for eyes
-              displayCtx.lineWidth = 2;
               eyeRects.forEach(eye => {
-                  displayCtx.strokeRect(face.x + eye.x, face.y + eye.y, eye.width, eye.height);
+                   const absoluteEyeRect = { x: face.x + eye.x, y: face.y + eye.y, width: eye.width, height: eye.height };
+                   drawDotsForRect(displayCtx, absoluteEyeRect, 'rgba(0, 255, 0, 0.7)', 3); // Green dots for eyes
               });
           }
 
@@ -242,13 +246,12 @@ const App: React.FC = () => {
           const findPupilCenter = (eyeRect: any) => {
               const eyeROI = faceROI.roi(eyeRect);
               
-              // New pupil detection logic
               let pupilCenter;
               const blurred = new window.cv.Mat();
               window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(5, 5), 0);
               
               const meanScalar = window.cv.mean(blurred);
-              const thresholdValue = meanScalar[0] * 0.7; // Dynamic threshold
+              const thresholdValue = meanScalar[0] * 0.7;
               
               const thresholded = new window.cv.Mat();
               window.cv.threshold(blurred, thresholded, thresholdValue, 255, window.cv.THRESH_BINARY_INV);
@@ -284,7 +287,6 @@ const App: React.FC = () => {
               }
               
               if (!pupilCenter) {
-                  // Fallback to center of eye rectangle
                   pupilCenter = {
                       x: face.x + eyeRect.x + eyeRect.width / 2,
                       y: face.y + eyeRect.y + eyeRect.height / 2
@@ -294,11 +296,10 @@ const App: React.FC = () => {
               if (displayCtx) {
                   displayCtx.fillStyle = 'rgba(255, 0, 0, 0.8)'; // Red dot for pupil
                   displayCtx.beginPath();
-                  displayCtx.arc(pupilCenter.x, pupilCenter.y, 3, 0, 2 * Math.PI, false);
+                  displayCtx.arc(pupilCenter.x, pupilCenter.y, 4, 0, 2 * Math.PI, false);
                   displayCtx.fill();
               }
               
-              // Cleanup
               eyeROI.delete();
               blurred.delete();
               thresholded.delete();
@@ -394,9 +395,8 @@ const App: React.FC = () => {
     if (calibrationState !== 'finished') return;
 
     const updateCursor = () => {
-      if (modeRef.current === Mode.Gaze && calibrationMapRef.current) {
+      if (calibrationMapRef.current) {
         const map = calibrationMapRef.current;
-        // Ensure map has a valid range to prevent division by zero
         if (map.eyeMaxX - map.eyeMinX !== 0 && map.eyeMaxY - map.eyeMinY !== 0) {
             const { x: rawEyeX, y: rawEyeY } = eyePositionRef.current;
             const normX = Math.max(0, Math.min(1, (rawEyeX - map.eyeMinX) / (map.eyeMaxX - map.eyeMinX)));
@@ -418,25 +418,6 @@ const App: React.FC = () => {
         } 
     };
   }, [calibrationState]);
-
-  // Keyboard controls
-  useEffect(() => {
-    const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.repeat || calibrationState !== 'finished') return;
-      switch (e.key.toLowerCase()) {
-        case 'g': setMode(Mode.Gaze); break;
-        case 'c': setMode(Mode.Click); break;
-      }
-    };
-    const handleKeyUp = (e: KeyboardEvent) => {
-       switch (e.key.toLowerCase()) {
-        case 'g': if (mode === Mode.Gaze) setMode(Mode.None); break;
-        case 'c': if (mode === Mode.Click) setMode(Mode.None); break;
-      }
-    };
-    window.addEventListener('keydown', handleKeyDown); window.addEventListener('keyup', handleKeyUp);
-    return () => { window.removeEventListener('keydown', handleKeyDown); window.removeEventListener('keyup', handleKeyUp); };
-  }, [mode, calibrationState]);
 
   // Auto-start calibration
   useEffect(() => {
@@ -476,11 +457,11 @@ const App: React.FC = () => {
 
       <main className="flex flex-col md:flex-row items-center justify-center gap-8 w-full">
         <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled} selectedCameraId={selectedCameraId} onStreamAcquired={handleStreamAcquired} canvasRef={displayCanvasRef} />
-        <StatusDisplay mode={mode} onRecalibrate={startCalibration} cameras={cameras} selectedCameraId={selectedCameraId} onCameraChange={handleCameraChange} />
+        <StatusDisplay calibrationState={calibrationState} onRecalibrate={startCalibration} cameras={cameras} selectedCameraId={selectedCameraId} onCameraChange={handleCameraChange} />
       </main>
       
       {calibrationState !== 'finished' && <CalibrationScreen state={calibrationState} totalPoints={TOTAL_CALIBRATION_POINTS} currentPointIndex={calibrationPointIndex} pointPosition={CALIBRATION_POINTS[calibrationPointIndex]} />}
-      {calibrationState === 'finished' && (mode === Mode.Gaze || mode === Mode.Click) && <GazeCursor position={cursorPosition} clickState={clickState} />}
+      {calibrationState === 'finished' && <GazeCursor position={cursorPosition} clickState={clickState} />}
     </div>
   );
 };

@@ -1,44 +1,37 @@
 import React from 'react';
-import { Mode } from '../types';
+import { CalibrationState } from '../types';
 import Icon from './Icon';
 
 interface StatusDisplayProps {
-  mode: Mode;
+  calibrationState: CalibrationState;
   onRecalibrate: () => void;
   cameras: MediaDeviceInfo[];
   selectedCameraId: string;
   onCameraChange: (deviceId: string) => void;
 }
 
-const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate, cameras, selectedCameraId, onCameraChange }) => {
+const StatusDisplay: React.FC<StatusDisplayProps> = ({ calibrationState, onRecalibrate, cameras, selectedCameraId, onCameraChange }) => {
   const getStatusText = () => {
-    switch (mode) {
-      case Mode.Gaze:
-        return 'Gaze Tracking Active';
-      case Mode.Click:
-        return 'Blink Click Active';
+    switch (calibrationState) {
+      case 'inProgress':
+        return 'Calibrating...';
+      case 'finished':
+        return 'Tracking Active';
       default:
-        return 'Idle';
+        return 'Initializing...';
     }
   };
 
   const getStatusColor = () => {
-    switch (mode) {
-      case Mode.Gaze:
+    switch (calibrationState) {
+      case 'inProgress':
+        return 'text-yellow-400';
+      case 'finished':
         return 'text-cyan-400';
-      case Mode.Click:
-        return 'text-lime-400';
       default:
         return 'text-gray-400';
     }
   };
-
-  const instructionBaseClasses = "flex items-start space-x-4 p-4 rounded-lg transition-all duration-300 border";
-  const instructionActiveClasses = {
-    [Mode.Gaze]: "bg-cyan-500/20 border-cyan-400",
-    [Mode.Click]: "bg-lime-500/20 border-lime-400",
-    [Mode.None]: "bg-gray-800/50 border-gray-700",
-  }
 
   return (
     <div className="w-full max-w-sm p-6 bg-gray-800 border border-gray-700 rounded-xl shadow-lg flex flex-col">
@@ -48,19 +41,19 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ mode, onRecalibrate, came
       </div>
 
       <div className="space-y-4">
-        <div className={`${instructionBaseClasses} ${mode === Mode.Gaze ? instructionActiveClasses[Mode.Gaze] : instructionActiveClasses[Mode.None]}`}>
+        <div className="flex items-start space-x-4 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
           <Icon name="eye" className="w-8 h-8 text-cyan-400 flex-shrink-0 mt-1" />
           <div>
-            <h3 className="font-bold">Gaze Control</h3>
-            <p className="text-sm text-gray-400">Press and hold <kbd className="px-2 py-1 text-sm font-semibold text-cyan-300 bg-gray-900 border border-cyan-700 rounded-md">G</kbd> to move the cursor with your gaze.</p>
+            <h3 className="font-bold">Gaze Tracking</h3>
+            <p className="text-sm text-gray-400">The cursor will follow your gaze after calibration is complete.</p>
           </div>
         </div>
         
-        <div className={`${instructionBaseClasses} ${mode === Mode.Click ? instructionActiveClasses[Mode.Click] : instructionActiveClasses[Mode.None]}`}>
+        <div className="flex items-start space-x-4 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
           <Icon name="click" className="w-8 h-8 text-lime-400 flex-shrink-0 mt-1" />
           <div>
             <h3 className="font-bold">Blink Click</h3>
-            <p className="text-sm text-gray-400">Hold <kbd className="px-2 py-1 text-sm font-semibold text-lime-300 bg-gray-900 border border-lime-700 rounded-md">C</kbd> and blink your left or right eye to trigger a corresponding click.</p>
+            <p className="text-sm text-gray-400">Blink your left or right eye to trigger a click.</p>
           </div>
         </div>
       </div>
