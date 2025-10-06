@@ -1,33 +1,40 @@
 import React from 'react';
 import Icon from './Icon';
+import { DetectionStatus } from '../types';
 
 interface StatusDisplayProps {
-  isCvLoading: boolean;
+  detectionStatus: DetectionStatus;
   cameras: MediaDeviceInfo[];
   selectedCameraId: string;
   onCameraChange: (deviceId: string) => void;
   onClearCorrections: () => void;
 }
 
-const StatusDisplay: React.FC<StatusDisplayProps> = ({ isCvLoading, cameras, selectedCameraId, onCameraChange, onClearCorrections }) => {
-  const getStatusText = () => {
-    return isCvLoading ? 'Initializing...' : 'Tracking Active';
+const StatusDisplay: React.FC<StatusDisplayProps> = ({ detectionStatus, cameras, selectedCameraId, onCameraChange, onClearCorrections }) => {
+  
+  const getDetectionStatusInfo = () => {
+    switch (detectionStatus) {
+      case 'searching':
+        return { text: 'Searching for Face...', color: 'text-yellow-400', animate: 'animate-pulse' };
+      case 'face_detected':
+        return { text: 'Face Detected', color: 'text-orange-400', animate: '' };
+      case 'tracking':
+        return { text: 'Tracking Eyes', color: 'text-cyan-400', animate: '' };
+      default:
+        return { text: 'Initializing...', color: 'text-gray-400', animate: 'animate-pulse' };
+    }
   };
 
-  const getStatusColor = () => {
-    return isCvLoading ? 'text-yellow-400' : 'text-cyan-400';
-  };
+  const statusInfo = getDetectionStatusInfo();
 
   return (
     <div className="w-full max-w-sm p-6 bg-gray-800 border border-gray-700 rounded-xl shadow-lg flex flex-col">
       <h2 className="text-2xl font-bold text-center mb-2">Controls</h2>
       <div className="text-center mb-6">
-        <p className={`text-lg font-semibold ${getStatusColor()}`}>{getStatusText()}</p>
-        {!isCvLoading && (
+        <p className={`text-lg font-semibold ${statusInfo.color} ${statusInfo.animate}`}>{statusInfo.text}</p>
           <button onClick={onClearCorrections} className="mt-2 text-sm underline text-cyan-400 hover:text-cyan-300 transition-colors">
             Clear Corrections
           </button>
-        )}
       </div>
 
       <div className="space-y-4">

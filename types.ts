@@ -17,3 +17,5 @@ export interface BlinkStateMachine {
   state: 'idle' | 'closing' | 'closed';
   frames: number;
 }
+
+export type DetectionStatus = 'searching' | 'face_detected' | 'tracking';
