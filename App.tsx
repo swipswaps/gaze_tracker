@@ -72,7 +72,8 @@ const App: React.FC = () => {
   const cursorPositionRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const eyePositionRef = useRef({ x: 0.5, y: 0.5 });
   const calibrationMapRef = useRef<CalibrationMap | null>(null);
-  const animationFrameIdRef = useRef<number>(0);
+  const cursorUpdateFrameIdRef = useRef<number>(0);
+  const processVideoFrameIdRef = useRef<number>(0);
   const filterXRef = useRef(new OneEuroFilter(60, 1.5, 0.5, 1.0));
   const filterYRef = useRef(new OneEuroFilter(60, 1.5, 0.5, 1.0));
   const faceCascadeRef = useRef<any>(null);
@@ -176,7 +177,7 @@ const App: React.FC = () => {
     
     const processVideo = () => {
       if (!videoRef.current || !processingCanvasRef.current || videoRef.current.paused || videoRef.current.ended) {
-        requestAnimationFrame(processVideo); return;
+        processVideoFrameIdRef.current = requestAnimationFrame(processVideo); return;
       }
       const video = videoRef.current;
       const processingCanvas = processingCanvasRef.current;
@@ -193,7 +194,7 @@ const App: React.FC = () => {
       
       processingCanvas.width = video.videoWidth; processingCanvas.height = video.videoHeight;
       const processingCtx = processingCanvas.getContext('2d', { willReadFrequently: true });
-      if (!processingCtx) { requestAnimationFrame(processVideo); return; }
+      if (!processingCtx) { processVideoFrameIdRef.current = requestAnimationFrame(processVideo); return; }
       
       processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
       const src = window.cv.imread(processingCanvas);
@@ -202,7 +203,7 @@ const App: React.FC = () => {
 
       const faces = new window.cv.RectVector();
       const minFaceSize = new window.cv.Size(video.videoWidth / 6, video.videoHeight / 6);
-      faceCascadeRef.current.detectMultiScale(gray, faces, 1.1, 4, 0, minFaceSize);
+      faceCascadeRef.current.detectMultiScale(gray, faces, 1.1, 3, 0, minFaceSize);
       minFaceSize.delete();
 
       if (faces.size() > 0) {
@@ -217,7 +218,7 @@ const App: React.FC = () => {
         const faceROI = gray.roi(face);
         const eyes = new window.cv.RectVector();
         const minEyeSize = new window.cv.Size(face.width / 9, face.height / 9);
-        eyeCascadeRef.current.detectMultiScale(faceROI, eyes, 1.1, 4, 0, minEyeSize);
+        eyeCascadeRef.current.detectMultiScale(faceROI, eyes, 1.1, 3, 0, minEyeSize);
         minEyeSize.delete();
 
         if (eyes.size() >= 2) {
@@ -256,13 +257,15 @@ const App: React.FC = () => {
       gray.delete();
       faces.delete();
 
-      requestAnimationFrame(processVideo);
+      processVideoFrameIdRef.current = requestAnimationFrame(processVideo);
     };
     
-    const frameId = requestAnimationFrame(processVideo);
-    return () => cancelAnimationFrame(frameId);
+    processVideoFrameIdRef.current = requestAnimationFrame(processVideo);
+    return () => {
+      cancelAnimationFrame(processVideoFrameIdRef.current);
+    };
 
-  }, [isCvLoading, cvError]);
+  }, [isCvLoading, cvError, mode]);
   
   // Handlers
   const handleStreamAcquired = useCallback(async (stream: MediaStream) => {
@@ -318,6 +321,11 @@ const App: React.FC = () => {
     const updateCursor = () => {
       if (mode === Mode.Gaze && calibrationMapRef.current) {
         const map = calibrationMapRef.current;
+        // Ensure map has a valid range to prevent division by zero
+        if (map.eyeMaxX - map.eyeMinX === 0 || map.eyeMaxY - map.eyeMinY === 0) {
+            cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
+            return;
+        }
         const { x: rawEyeX, y: rawEyeY } = eyePositionRef.current;
         const normX = Math.max(0, Math.min(1, (rawEyeX - map.eyeMinX) / (map.eyeMaxX - map.eyeMinX)));
         const normY = Math.max(0, Math.min(1, (rawEyeY - map.eyeMinY) / (map.eyeMaxY - map.eyeMinY)));
@@ -326,13 +334,13 @@ const App: React.FC = () => {
         cursorPositionRef.current = { x: filterXRef.current.filter(targetX), y: filterYRef.current.filter(targetY) };
         setCursorPosition(cursorPositionRef.current);
       }
-      animationFrameIdRef.current = requestAnimationFrame(updateCursor);
+      cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
     };
-    if (calibrationState === 'finished' && mode === Mode.Gaze) {
-      animationFrameIdRef.current = requestAnimationFrame(updateCursor);
+    if (calibrationState === 'finished') { // Start loop after calibration, check for mode inside
+      cursorUpdateFrameIdRef.current = requestAnimationFrame(updateCursor);
     }
-    return () => { if (animationFrameIdRef.current) { cancelAnimationFrame(animationFrameIdRef.current); } };
-  }, [mode, calibrationState]);
+    return () => { if (cursorUpdateFrameIdRef.current) { cancelAnimationFrame(cursorUpdateFrameIdRef.current); } };
+  }, [calibrationState]);
 
   // Keyboard controls
   useEffect(() => {
