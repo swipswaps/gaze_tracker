@@ -1,0 +1,7 @@
+{
+  "name": "Webcam Gaze Tracker",
+  "description": "A web application that uses your webcam to simulate eye gaze tracking for controlling an on-screen cursor. Press and hold keyboard shortcuts to activate gaze-based movement and blink-based clicks.",
+  "requestFramePermissions": [
+    "camera"
+  ]
+}
