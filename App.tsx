@@ -1,4 +1,3 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
@@ -20,28 +19,30 @@ const EAR_THRESHOLD = 0.25;
 const BLINK_CLOSING_FRAMES = 1;
 const BLINK_CLOSED_FRAMES = 2;
 const K_NEAREST_NEIGHBORS = 4;
-const INVERSE_DISTANCE_POWER = 2; // Reduced power for smoother interpolation
+const INVERSE_DISTANCE_POWER = 2;
 const CAMERA_STORAGE_KEY = 'gazeTrack-selectedCameraId';
 
 // --- Helper Functions ---
 const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoints: CalibrationPointData[]) => {
-    // If we have no data, default to the center
     if (correctionPoints.length === 0) {
+        // Default to center if no corrections have been made
         return { x: window.innerWidth / 2, y: window.innerHeight / 2 };
     }
     
-    // If we don't have enough points for KNN, use a simpler model (e.g., follow the last point)
+    // If there are few points, use a simpler model based on the last correction
     if (correctionPoints.length < K_NEAREST_NEIGHBORS) {
         const lastPoint = correctionPoints[correctionPoints.length - 1];
         const xOffset = currentEyePos.x - lastPoint.eye.x;
         const yOffset = currentEyePos.y - lastPoint.eye.y;
+        // The multiplier here acts as a sensitivity setting
+        const sensitivity = 2.5;
         return {
-            x: (lastPoint.screen.x * window.innerWidth) + (xOffset * window.innerWidth),
-            y: (lastPoint.screen.y * window.innerHeight) + (yOffset * window.innerHeight),
+            x: (lastPoint.screen.x * window.innerWidth) + (xOffset * window.innerWidth * sensitivity),
+            y: (lastPoint.screen.y * window.innerHeight) + (yOffset * window.innerHeight * sensitivity),
         };
     }
 
-    // Find the K-Nearest Neighbors based on eye position in the normalized eye space
+    // K-Nearest Neighbors Inverse Distance Weighting
     const distances = correctionPoints.map(point => ({
         ...point,
         dist: Math.sqrt(Math.pow(point.eye.x - currentEyePos.x, 2) + Math.pow(point.eye.y - currentEyePos.y, 2))
@@ -52,9 +53,8 @@ const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoint
     let totalWeight = 0;
     let weightedScreenX = 0;
     let weightedScreenY = 0;
-    const epsilon = 1e-9; // To avoid division by zero if a point is identical
+    const epsilon = 1e-9; // To prevent division by zero
 
-    // Calculate weighted average of screen positions
     nearestNeighbors.forEach(neighbor => {
         const weight = 1 / (Math.pow(neighbor.dist, INVERSE_DISTANCE_POWER) + epsilon);
         weightedScreenX += neighbor.screen.x * weight;
@@ -62,15 +62,14 @@ const mapEyeToScreen = (currentEyePos: { x: number, y: number }, correctionPoint
         totalWeight += weight;
     });
 
-    // Handle case where totalWeight is zero (should be rare with epsilon)
     if (totalWeight === 0) {
+       // Fallback to the absolute closest neighbor if weights sum to zero
        return { 
            x: nearestNeighbors[0].screen.x * window.innerWidth,
            y: nearestNeighbors[0].screen.y * window.innerHeight
        };
     }
     
-    // Final Position is the weighted average
     const finalX = (weightedScreenX / totalWeight) * window.innerWidth;
     const finalY = (weightedScreenY / totalWeight) * window.innerHeight;
 
@@ -118,6 +117,38 @@ const App: React.FC = () => {
     }
   }, [selectedCameraId]);
 
+  // Enumerate cameras and validate stored selection
+  useEffect(() => {
+    const initCameras = async () => {
+      try {
+        // We need to get a stream once to get permission to enumerate devices
+        const stream = await navigator.mediaDevices.getUserMedia({ video: true });
+        // Stop the tracks immediately, we don't need to show this stream
+        stream.getTracks().forEach(track => track.stop());
+
+        const devices = await navigator.mediaDevices.enumerateDevices();
+        const videoDevices = devices.filter(device => device.kind === 'videoinput');
+        setCameras(videoDevices);
+        
+        if (videoDevices.length > 0) {
+            const storedCameraId = localStorage.getItem(CAMERA_STORAGE_KEY);
+            const storedCameraExists = videoDevices.some(d => d.deviceId === storedCameraId);
+
+            if (storedCameraExists) {
+                setSelectedCameraId(storedCameraId!);
+            } else {
+                // If stored camera is not found or none was stored, default to the first one
+                setSelectedCameraId(videoDevices[0].deviceId);
+            }
+        }
+      } catch (err) {
+        console.error("Error initializing cameras:", err);
+        setCvError("Could not access camera. Please grant permission and ensure a camera is connected.");
+      }
+    };
+    initCameras();
+  }, []);
+
   const triggerClick = useCallback((side: 'left' | 'right') => {
     setClickState(side);
     setTimeout(() => setClickState('none'), 200); // Visual feedback duration
@@ -126,14 +157,20 @@ const App: React.FC = () => {
   // Load OpenCV and classifiers
   useEffect(() => {
     const loadCv = async () => {
-      await new Promise<void>((resolve) => {
-        const interval = setInterval(() => {
-          if (window.cv && window.cv.CascadeClassifier) {
-            clearInterval(interval);
-            resolve();
-          }
-        }, 100);
-      });
+      if (window.cv && window.cv.CascadeClassifier) {
+          // Already loaded
+      } else {
+        await new Promise<void>((resolve, reject) => {
+            const timeout = setTimeout(() => reject(new Error("OpenCV script loading timed out.")), 10000);
+            const interval = setInterval(() => {
+              if (window.cv && window.cv.CascadeClassifier) {
+                clearInterval(interval);
+                clearTimeout(timeout);
+                resolve();
+              }
+            }, 100);
+        });
+      }
 
       const createFileFromUrl = async (path: string, url: string) => {
         const response = await fetch(url);
@@ -163,7 +200,7 @@ const App: React.FC = () => {
 
   // Real-time CV Processing Loop
   useEffect(() => {
-    if (isCvLoading || cvError) return;
+    if (isCvLoading || cvError || !selectedCameraId) return;
 
     const calculateEAR = (rect: any) => rect.height / rect.width;
     
@@ -214,21 +251,60 @@ const App: React.FC = () => {
     };
     
     const findPupilCenter = (eyeROI: any) => {
-        let blurred = new window.cv.Mat();
-        let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 }; // Default to center
+        let thresholded = new window.cv.Mat();
+        let contours = new window.cv.MatVector();
+        let hierarchy = new window.cv.Mat();
+        let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 };
+        
+        const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(3, 3));
 
         try {
-            // Use a heavy blur to smooth out details and find the general dark area
-            // Kernel size must be odd
-            window.cv.GaussianBlur(eyeROI, blurred, new window.cv.Size(15, 15), 0);
-            
-            // Find the location of the minimum pixel value (the darkest spot)
-            const result = window.cv.minMaxLoc(blurred);
-            center = result.minLoc;
+            // Adaptive thresholding is great for varying lighting
+            window.cv.adaptiveThreshold(eyeROI, thresholded, 255, window.cv.ADAPTIVE_THRESH_MEAN_C, window.cv.THRESH_BINARY_INV, 21, 5);
+
+            // Morphological operations to remove noise (like eyelashes/reflections)
+            window.cv.morphologyEx(thresholded, thresholded, window.cv.MORPH_OPEN, kernel);
+            window.cv.morphologyEx(thresholded, thresholded, window.cv.MORPH_CLOSE, kernel);
+
+            window.cv.findContours(thresholded, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
+
+            let bestContour = null;
+            let maxArea = 0;
+
+            for (let i = 0; i < contours.size(); ++i) {
+                const contour = contours.get(i);
+                const area = window.cv.contourArea(contour);
+                const rect = window.cv.boundingRect(contour);
+                const aspectRatio = rect.width / rect.height;
+
+                // Filter contours to find pupil-like shapes
+                if (area > 20 && area > maxArea && aspectRatio > 0.5 && aspectRatio < 1.8) {
+                    if (bestContour) bestContour.delete();
+                    bestContour = contour;
+                    maxArea = area;
+                } else {
+                    contour.delete();
+                }
+            }
+
+            if (bestContour) {
+                const moments = window.cv.moments(bestContour, false);
+                if (moments.m00 !== 0) {
+                    center = {
+                        x: moments.m10 / moments.m00,
+                        y: moments.m01 / moments.m00
+                    };
+                }
+                bestContour.delete();
+            }
+
         } catch(e) {
             console.error("Error in findPupilCenter:", e);
         } finally {
-            blurred.delete();
+            thresholded.delete();
+            contours.delete();
+            hierarchy.delete();
+            kernel.delete();
         }
         
         return center;
@@ -307,13 +383,13 @@ const App: React.FC = () => {
               });
           }
           
-          const avgPupilX = (leftPupilAbs.x + rightPupilAbs.x) / 2;
-          const avgPupilY = (leftPupilAbs.y + rightPupilAbs.y) / 2;
+          const normalizedLeftPupil = { x: leftPupilRel.x / leftEyeRect.width, y: leftPupilRel.y / leftEyeRect.height };
+          const normalizedRightPupil = { x: rightPupilRel.x / rightEyeRect.width, y: rightPupilRel.y / rightEyeRect.height };
 
-          const normalizedX = (avgPupilX - face.x) / face.width;
-          const normalizedY = (avgPupilY - face.y) / face.height;
+          const avgNormalizedX = (normalizedLeftPupil.x + normalizedRightPupil.x) / 2;
+          const avgNormalizedY = (normalizedLeftPupil.y + normalizedRightPupil.y) / 2;
           
-          eyePositionRef.current = { x: 1 - normalizedX, y: normalizedY };
+          eyePositionRef.current = { x: avgNormalizedX, y: avgNormalizedY };
           
           const newTarget = mapEyeToScreen(eyePositionRef.current, correctionDataRef.current);
           targetPositionRef.current = newTarget;
@@ -341,30 +417,9 @@ const App: React.FC = () => {
       cancelAnimationFrame(processVideoFrameIdRef.current);
     };
 
-  }, [isCvLoading, cvError, triggerClick]);
+  }, [isCvLoading, cvError, triggerClick, selectedCameraId]);
   
   // Handlers
-  const handleStreamAcquired = useCallback(async (stream: MediaStream) => {
-    try {
-      const devices = await navigator.mediaDevices.enumerateDevices();
-      const videoDevices = devices.filter(device => device.kind === 'videoinput');
-      setCameras(videoDevices);
-      
-      if (videoDevices.length > 0) {
-        const storedCameraId = localStorage.getItem(CAMERA_STORAGE_KEY);
-        const storedCameraExists = videoDevices.some(d => d.deviceId === storedCameraId);
-
-        if (!storedCameraExists && selectedCameraId) {
-            // The previously selected camera is gone, switch to the first available one
-            setSelectedCameraId(videoDevices[0].deviceId);
-        } else if (!selectedCameraId) {
-             // This is the first run, or storage was empty
-             setSelectedCameraId(videoDevices[0].deviceId);
-        }
-      }
-    } catch (err) { console.error("Error enumerating devices:", err); }
-  }, [selectedCameraId]);
-
   const handleCameraChange = (deviceId: string) => {
     if (deviceId !== selectedCameraId) { 
       setSelectedCameraId(deviceId);
@@ -454,7 +509,7 @@ const App: React.FC = () => {
       
       {(isCvLoading || cvError) && (
          <div className="absolute inset-0 bg-black bg-opacity-80 flex flex-col items-center justify-center z-30">
-            {isCvLoading ? (
+            {isCvLoading && !cvError ? (
                 <>
                     <Icon name="eye" className="w-16 h-16 mb-4 text-cyan-400 animate-pulse" />
                     <h2 className="text-2xl font-bold mb-2">Loading AI Models...</h2>
@@ -463,7 +518,7 @@ const App: React.FC = () => {
             ) : (
                  <div className="text-center text-red-400">
                     <Icon name="camera" className="w-16 h-16 mb-4 opacity-50" />
-                    <p className="text-lg font-bold mb-2">Error Loading Models</p>
+                    <p className="text-lg font-bold mb-2">Error</p>
                     <p className="max-w-md">{cvError}</p>
                  </div>
             )}
@@ -471,7 +526,7 @@ const App: React.FC = () => {
       )}
 
       <main className="flex flex-col md:flex-row items-center justify-center gap-8 w-full">
-        <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled} selectedCameraId={selectedCameraId} onStreamAcquired={handleStreamAcquired} canvasRef={displayCanvasRef} />
+        <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled && !!selectedCameraId} selectedCameraId={selectedCameraId} canvasRef={displayCanvasRef} />
         <StatusDisplay isCvLoading={isCvLoading} onClearCorrections={handleClearCorrections} cameras={cameras} selectedCameraId={selectedCameraId} onCameraChange={handleCameraChange} />
       </main>
       

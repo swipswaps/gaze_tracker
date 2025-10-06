@@ -5,22 +5,20 @@ interface WebcamViewProps {
   videoRef: React.RefObject<HTMLVideoElement>;
   isEnabled: boolean;
   selectedCameraId: string;
-  onStreamAcquired: (stream: MediaStream) => void;
   canvasRef?: React.RefObject<HTMLCanvasElement>;
 }
 
-const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, onStreamAcquired, canvasRef }) => {
-  const streamAcquiredFiredRef = useRef(false);
+const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, canvasRef }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     // Reset error state when dependencies change
     setError(null);
 
-    if (isEnabled) {
+    if (isEnabled && selectedCameraId) {
       const constraints = {
         video: {
-          deviceId: selectedCameraId ? { exact: selectedCameraId } : undefined,
+          deviceId: { exact: selectedCameraId },
           width: 1280,
           height: 720,
         },
@@ -32,10 +30,6 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
         .then(stream => {
           if (active && videoRef.current) {
             videoRef.current.srcObject = stream;
-            if (!streamAcquiredFiredRef.current) {
-              onStreamAcquired(stream);
-              streamAcquiredFiredRef.current = true;
-            }
           } else {
             // cleanup if component unmounted before stream was attached
              stream.getTracks().forEach(track => track.stop());
@@ -66,13 +60,13 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
         }
       };
     } else {
-      // Cleanup if isEnabled becomes false
+      // Cleanup if isEnabled or selectedCameraId becomes false/empty
       if (videoRef.current && videoRef.current.srcObject) {
         (videoRef.current.srcObject as MediaStream).getTracks().forEach(track => track.stop());
         videoRef.current.srcObject = null;
       }
     }
-  }, [isEnabled, selectedCameraId, videoRef, onStreamAcquired]);
+  }, [isEnabled, selectedCameraId, videoRef]);
 
   return (
     <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl shadow-2xl overflow-hidden border-2 border-gray-700">
