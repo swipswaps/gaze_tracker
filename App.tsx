@@ -251,60 +251,22 @@ const App: React.FC = () => {
     };
     
     const findPupilCenter = (eyeROI: any) => {
-        let thresholded = new window.cv.Mat();
-        let contours = new window.cv.MatVector();
-        let hierarchy = new window.cv.Mat();
         let center = { x: eyeROI.cols / 2, y: eyeROI.rows / 2 };
+        const blurred = new window.cv.Mat();
+        const ksize = new window.cv.Size(15, 15); // Kernel size must be odd
         
-        const kernel = window.cv.getStructuringElement(window.cv.MORPH_ELLIPSE, new window.cv.Size(3, 3));
-
         try {
-            // Adaptive thresholding is great for varying lighting
-            window.cv.adaptiveThreshold(eyeROI, thresholded, 255, window.cv.ADAPTIVE_THRESH_MEAN_C, window.cv.THRESH_BINARY_INV, 21, 5);
+            // Heavy blur smooths out reflections and details
+            window.cv.GaussianBlur(eyeROI, blurred, ksize, 0, 0, window.cv.BORDER_DEFAULT);
 
-            // Morphological operations to remove noise (like eyelashes/reflections)
-            window.cv.morphologyEx(thresholded, thresholded, window.cv.MORPH_OPEN, kernel);
-            window.cv.morphologyEx(thresholded, thresholded, window.cv.MORPH_CLOSE, kernel);
-
-            window.cv.findContours(thresholded, contours, hierarchy, window.cv.RETR_EXTERNAL, window.cv.CHAIN_APPROX_SIMPLE);
-
-            let bestContour = null;
-            let maxArea = 0;
-
-            for (let i = 0; i < contours.size(); ++i) {
-                const contour = contours.get(i);
-                const area = window.cv.contourArea(contour);
-                const rect = window.cv.boundingRect(contour);
-                const aspectRatio = rect.width / rect.height;
-
-                // Filter contours to find pupil-like shapes
-                if (area > 20 && area > maxArea && aspectRatio > 0.5 && aspectRatio < 1.8) {
-                    if (bestContour) bestContour.delete();
-                    bestContour = contour;
-                    maxArea = area;
-                } else {
-                    contour.delete();
-                }
-            }
-
-            if (bestContour) {
-                const moments = window.cv.moments(bestContour, false);
-                if (moments.m00 !== 0) {
-                    center = {
-                        x: moments.m10 / moments.m00,
-                        y: moments.m01 / moments.m00
-                    };
-                }
-                bestContour.delete();
-            }
+            // Find the darkest spot in the blurred image, which corresponds to the pupil
+            const minMax = window.cv.minMaxLoc(blurred);
+            center = { x: minMax.minLoc.x, y: minMax.minLoc.y };
 
         } catch(e) {
             console.error("Error in findPupilCenter:", e);
         } finally {
-            thresholded.delete();
-            contours.delete();
-            hierarchy.delete();
-            kernel.delete();
+            blurred.delete();
         }
         
         return center;
