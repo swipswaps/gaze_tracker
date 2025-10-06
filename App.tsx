@@ -67,7 +67,8 @@ const BLINK_CLOSED_FRAMES = 2;
 const App: React.FC = () => {
   // Refs
   const videoRef = useRef<HTMLVideoElement>(null);
-  const canvasRef = useRef<HTMLCanvasElement>(null);
+  const processingCanvasRef = useRef<HTMLCanvasElement>(null);
+  const displayCanvasRef = useRef<HTMLCanvasElement>(null);
   const cursorPositionRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
   const eyePositionRef = useRef({ x: 0.5, y: 0.5 });
   const calibrationMapRef = useRef<CalibrationMap | null>(null);
@@ -174,34 +175,64 @@ const App: React.FC = () => {
     };
     
     const processVideo = () => {
-      if (!videoRef.current || !canvasRef.current || videoRef.current.paused || videoRef.current.ended) {
+      if (!videoRef.current || !processingCanvasRef.current || videoRef.current.paused || videoRef.current.ended) {
         requestAnimationFrame(processVideo); return;
       }
       const video = videoRef.current;
-      const canvas = canvasRef.current;
-      canvas.width = video.videoWidth; canvas.height = video.videoHeight;
-      const ctx = canvas.getContext('2d', { willReadFrequently: true });
-      if (!ctx) { requestAnimationFrame(processVideo); return; }
+      const processingCanvas = processingCanvasRef.current;
       
-      ctx.drawImage(video, 0, 0, canvas.width, canvas.height);
-      const src = window.cv.imread(canvas);
+      const displayCanvas = displayCanvasRef.current;
+      const displayCtx = displayCanvas ? displayCanvas.getContext('2d') : null;
+      if (displayCanvas && (displayCanvas.width !== video.videoWidth || displayCanvas.height !== video.videoHeight)) {
+          displayCanvas.width = video.videoWidth;
+          displayCanvas.height = video.videoHeight;
+      }
+      if (displayCtx) {
+          displayCtx.clearRect(0, 0, displayCanvas.width, displayCanvas.height);
+      }
+      
+      processingCanvas.width = video.videoWidth; processingCanvas.height = video.videoHeight;
+      const processingCtx = processingCanvas.getContext('2d', { willReadFrequently: true });
+      if (!processingCtx) { requestAnimationFrame(processVideo); return; }
+      
+      processingCtx.drawImage(video, 0, 0, processingCanvas.width, processingCanvas.height);
+      const src = window.cv.imread(processingCanvas);
       const gray = new window.cv.Mat();
       window.cv.cvtColor(src, gray, window.cv.COLOR_RGBA2GRAY);
 
       const faces = new window.cv.RectVector();
-      faceCascadeRef.current.detectMultiScale(gray, faces);
+      const minFaceSize = new window.cv.Size(video.videoWidth / 6, video.videoHeight / 6);
+      faceCascadeRef.current.detectMultiScale(gray, faces, 1.1, 4, 0, minFaceSize);
+      minFaceSize.delete();
 
       if (faces.size() > 0) {
         const face = faces.get(0);
+
+        if (displayCtx) {
+            displayCtx.strokeStyle = 'rgba(0, 255, 255, 0.8)'; // Cyan for face
+            displayCtx.lineWidth = 4;
+            displayCtx.strokeRect(face.x, face.y, face.width, face.height);
+        }
+
         const faceROI = gray.roi(face);
         const eyes = new window.cv.RectVector();
-        eyeCascadeRef.current.detectMultiScale(faceROI, eyes);
+        const minEyeSize = new window.cv.Size(face.width / 9, face.height / 9);
+        eyeCascadeRef.current.detectMultiScale(faceROI, eyes, 1.1, 4, 0, minEyeSize);
+        minEyeSize.delete();
 
         if (eyes.size() >= 2) {
           let eyeRects = [eyes.get(0), eyes.get(1)];
           // Sort eyes by x-coordinate to distinguish left from right
           eyeRects.sort((a, b) => a.x - b.x);
           
+          if (displayCtx) {
+              displayCtx.strokeStyle = 'rgba(0, 255, 0, 0.8)'; // Green for eyes
+              displayCtx.lineWidth = 2;
+              eyeRects.forEach(eye => {
+                  displayCtx.strokeRect(face.x + eye.x, face.y + eye.y, eye.width, eye.height);
+              });
+          }
+
           const [leftEye, rightEye] = eyeRects;
           
           const avgEyeX = (leftEye.x + leftEye.width / 2 + rightEye.x + rightEye.width / 2) / 2;
@@ -231,7 +262,7 @@ const App: React.FC = () => {
     const frameId = requestAnimationFrame(processVideo);
     return () => cancelAnimationFrame(frameId);
 
-  }, [isCvLoading, cvError, mode]);
+  }, [isCvLoading, cvError]);
   
   // Handlers
   const handleStreamAcquired = useCallback(async (stream: MediaStream) => {
@@ -334,7 +365,7 @@ const App: React.FC = () => {
 
   return (
     <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden">
-      <canvas ref={canvasRef} style={{ display: 'none' }} />
+      <canvas ref={processingCanvasRef} style={{ display: 'none' }} />
       <header className="absolute top-0 left-0 p-4 z-10">
         <h1 className="text-2xl font-bold tracking-wider">GazeTrack AI</h1>
         <p className="text-sm text-gray-400">Real-time gaze and blink detection.</p>
@@ -359,7 +390,7 @@ const App: React.FC = () => {
       )}
 
       <main className="flex flex-col md:flex-row items-center justify-center gap-8 w-full">
-        <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled} selectedCameraId={selectedCameraId} onStreamAcquired={handleStreamAcquired} />
+        <WebcamView videoRef={videoRef} isEnabled={isWebcamEnabled} selectedCameraId={selectedCameraId} onStreamAcquired={handleStreamAcquired} canvasRef={displayCanvasRef} />
         <StatusDisplay mode={mode} onRecalibrate={startCalibration} cameras={cameras} selectedCameraId={selectedCameraId} onCameraChange={handleCameraChange} />
       </main>
       

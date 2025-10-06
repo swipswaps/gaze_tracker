@@ -6,9 +6,10 @@ interface WebcamViewProps {
   isEnabled: boolean;
   selectedCameraId: string;
   onStreamAcquired: (stream: MediaStream) => void;
+  canvasRef?: React.RefObject<HTMLCanvasElement>;
 }
 
-const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, onStreamAcquired }) => {
+const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, onStreamAcquired, canvasRef }) => {
   const streamAcquiredFiredRef = useRef(false);
   const [error, setError] = useState<string | null>(null);
 
@@ -82,6 +83,12 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
         muted
         className="w-full h-full object-cover transform -scale-x-100"
       />
+      {canvasRef && (
+        <canvas
+            ref={canvasRef}
+            className="absolute top-0 left-0 w-full h-full transform -scale-x-100 pointer-events-none"
+        />
+      )}
       {isEnabled && !error && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
           {/* Fake tracking indicators to enhance the simulation */}
