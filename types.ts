@@ -14,7 +14,7 @@ export interface CalibrationPointData {
 }
 
 export interface BlinkStateMachine {
-  state: 'idle' | 'closing' | 'closed';
+  state: 'open' | 'closing' | 'closed' | 'cooldown';
   frames: number;
 }
 

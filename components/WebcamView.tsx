@@ -1,3 +1,4 @@
+
 import React, { useEffect, useRef, useState } from 'react';
 import Icon from './Icon';
 
@@ -6,9 +7,10 @@ interface WebcamViewProps {
   isEnabled: boolean;
   selectedCameraId: string;
   canvasRef?: React.RefObject<HTMLCanvasElement>;
+  blinkState: { left: boolean; right: boolean };
 }
 
-const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, canvasRef }) => {
+const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCameraId, canvasRef, blinkState }) => {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
@@ -68,6 +70,12 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
     }
   }, [isEnabled, selectedCameraId, videoRef]);
 
+  const baseCircleClasses = "absolute top-1/2 -translate-y-1/2 w-8 h-8 border-2 rounded-full opacity-80 transition-all duration-150";
+  // User's right eye is on the left of the mirrored video
+  const rightEyeClasses = blinkState.right ? 'border-yellow-400 scale-125' : 'border-cyan-400 animate-pulse';
+  // User's left eye is on the right of the mirrored video
+  const leftEyeClasses = blinkState.left ? 'border-yellow-400 scale-125' : 'border-cyan-400 animate-pulse';
+
   return (
     <div className="relative w-full max-w-4xl aspect-video bg-black rounded-xl shadow-2xl overflow-hidden border-2 border-gray-700">
       <video
@@ -85,10 +93,9 @@ const WebcamView: React.FC<WebcamViewProps> = ({ videoRef, isEnabled, selectedCa
       )}
       {isEnabled && !error && (
         <div className="absolute inset-0 flex items-center justify-center pointer-events-none">
-          {/* Fake tracking indicators to enhance the simulation */}
           <div className="relative w-48 h-24">
-            <div className="absolute top-1/2 left-0 -translate-y-1/2 w-8 h-8 border-2 border-cyan-400 rounded-full animate-pulse opacity-80"></div>
-            <div className="absolute top-1/2 right-0 -translate-y-1/2 w-8 h-8 border-2 border-cyan-400 rounded-full animate-pulse opacity-80"></div>
+            <div className={`${baseCircleClasses} left-0 ${rightEyeClasses}`}></div>
+            <div className={`${baseCircleClasses} right-0 ${leftEyeClasses}`}></div>
             <div className="absolute top-1/2 left-1/2 -translate-x-1/2 -translate-y-1/2 w-2 h-2 bg-red-500 rounded-full shadow-lg shadow-red-500/50"></div>
           </div>
         </div>

@@ -1,3 +1,4 @@
+
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
@@ -50,6 +51,8 @@ const App: React.FC = () => {
   const eyeCascadeRef = useRef<any>(null);
   const correctionDataRef = useRef<CalibrationPointData[]>([]);
   const smoothedCursorPosRef = useRef({ x: window.innerWidth / 2, y: window.innerHeight / 2 });
+  const leftBlinkDetectorRef = useRef<BlinkStateMachine>({ state: 'open', frames: 0 });
+  const rightBlinkDetectorRef = useRef<BlinkStateMachine>({ state: 'open', frames: 0 });
   
   // State
   const [cameras, setCameras] = useState<MediaDeviceInfo[]>([]);
@@ -62,6 +65,7 @@ const App: React.FC = () => {
   const [isCorrectionMode, setIsCorrectionMode] = useState(false);
   const [correctionFeedback, setCorrectionFeedback] = useState(false);
   const [detectionStatus, setDetectionStatus] = useState<DetectionStatus>('searching');
+  const [eyeBlinkState, setEyeBlinkState] = useState({ left: false, right: false });
 
   // Sync state to ref for use in RAF loop
   useEffect(() => {
@@ -152,6 +156,65 @@ const App: React.FC = () => {
       setIsCvLoading(false);
     });
   }, []);
+  
+  const processBlinks = useCallback((leftEyeDetected: boolean, rightEyeDetected: boolean) => {
+    const BLINK_FRAMES_TO_CLOSE = 2;
+    const BLINK_COOLDOWN_FRAMES = 15;
+    
+    const updateDetector = (detector: BlinkStateMachine, isDetected: boolean) => {
+        let blinkTriggered = false;
+        switch (detector.state) {
+            case 'open':
+                if (!isDetected) {
+                    detector.state = 'closing';
+                    detector.frames = 1;
+                }
+                break;
+            case 'closing':
+                if (!isDetected) {
+                    detector.frames++;
+                    if (detector.frames >= BLINK_FRAMES_TO_CLOSE) {
+                        detector.state = 'closed';
+                        blinkTriggered = true;
+                    }
+                } else {
+                    detector.state = 'open';
+                    detector.frames = 0;
+                }
+                break;
+            case 'closed':
+                detector.state = 'cooldown';
+                detector.frames = 1;
+                break;
+            case 'cooldown':
+                detector.frames++;
+                if (detector.frames >= BLINK_COOLDOWN_FRAMES) {
+                    detector.state = 'open';
+                    detector.frames = 0;
+                }
+                break;
+        }
+        return blinkTriggered;
+    };
+    
+    const leftBlinked = updateDetector(leftBlinkDetectorRef.current, leftEyeDetected);
+    const rightBlinked = updateDetector(rightBlinkDetectorRef.current, rightEyeDetected);
+
+    if (leftBlinked) triggerClick('left');
+    if (rightBlinked) triggerClick('right');
+
+    if (leftBlinked || rightBlinked) {
+        setEyeBlinkState(prev => ({ left: prev.left || leftBlinked, right: prev.right || rightBlinked }));
+        
+        setTimeout(() => {
+            setEyeBlinkState(prev => ({
+                left: leftBlinked ? false : prev.left,
+                right: rightBlinked ? false : prev.right,
+            }));
+        }, 250);
+    }
+  }, [triggerClick]);
+
 
   const drawProceduralMesh = (ctx: CanvasRenderingContext2D, rect: any, template: {x:number, y:number}[], color: string) => {
     ctx.fillStyle = color;
@@ -232,29 +295,44 @@ const App: React.FC = () => {
           const faceRect = faces.get(0);
           drawProceduralMesh(displayCtx, faceRect, FACE_MESH_TEMPLATE, 'rgba(0, 255, 150, 0.7)');
 
-          // --- New Head Tracking Logic ---
           const faceCenterX = faceRect.x + faceRect.width / 2;
           const faceCenterY = faceRect.y + faceRect.height / 2;
           const normalizedX = faceCenterX / video.videoWidth;
           const normalizedY = faceCenterY / video.videoHeight;
+          eyePositionRef.current = { x: 1.0 - normalizedX, y: normalizedY };
 
-          // Use normalized, horizontally-flipped face center for cursor control.
-          // The video is mirrored, so we flip the X-axis for intuitive control.
-          eyePositionRef.current = { 
-              x: 1.0 - normalizedX, 
-              y: normalizedY 
-          };
-
-          // --- Visual Eye Detection for Feedback ---
           const faceROI = gray.roi(faceRect);
           const eyes = new window.cv.RectVector();
           const minEyeSize = new window.cv.Size(faceRect.width / 8, faceRect.height / 8);
           eyeCascadeRef.current.detectMultiScale(faceROI, eyes, 1.15, 7, 0, minEyeSize);
           
-          if (eyes.size() > 0) { // If eyes are visible, update status
-              setDetectionStatus('tracking');
+          if (eyes.size() > 0) { setDetectionStatus('tracking'); }
+
+          const detectedEyes = [];
+          for (let i = 0; i < eyes.size(); i++) {
+              detectedEyes.push(eyes.get(i));
+          }
+          detectedEyes.sort((a, b) => a.x - b.x);
+
+          let rightEyeDetected = false;
+          let leftEyeDetected = false;
+
+          // In the mirrored video, the eye on the left is the user's right eye.
+          if (detectedEyes.length === 2) {
+              rightEyeDetected = true;
+              leftEyeDetected = true;
+          } else if (detectedEyes.length === 1) {
+              const eye = detectedEyes[0];
+              const eyeCenterX = eye.x + eye.width / 2;
+              if (eyeCenterX < faceRect.width / 2) {
+                  rightEyeDetected = true;
+              } else {
+                  leftEyeDetected = true;
+              }
           }
 
+          processBlinks(leftEyeDetected, rightEyeDetected);
+          
           faceROI.delete();
           eyes.delete();
         } else {
@@ -267,7 +345,7 @@ const App: React.FC = () => {
       console.error("Error in processVideo:", e);
     }
     processVideoFrameIdRef.current = requestAnimationFrame(processVideo);
-  }, []);
+  }, [processBlinks]);
 
   useEffect(() => {
     if (isCvLoading || cvError || !selectedCameraId) return;
@@ -300,7 +378,6 @@ const App: React.FC = () => {
     };
     setCorrectionData(prev => [...prev, newCorrection]);
     
-    // Jump cursor to the corrected position immediately
     smoothedCursorPosRef.current = { x: e.clientX, y: e.clientY };
     setCursorPosition({ x: e.clientX, y: e.clientY });
 
@@ -350,7 +427,13 @@ const App: React.FC = () => {
       )}
 
       <main className="flex flex-col md:flex-row items-center justify-center gap-8 w-full">
-        <WebcamView videoRef={videoRef} isEnabled={!!selectedCameraId} selectedCameraId={selectedCameraId} canvasRef={displayCanvasRef} />
+        <WebcamView 
+          videoRef={videoRef} 
+          isEnabled={!!selectedCameraId} 
+          selectedCameraId={selectedCameraId} 
+          canvasRef={displayCanvasRef} 
+          blinkState={eyeBlinkState}
+        />
         <StatusDisplay 
           detectionStatus={detectionStatus} 
           onClearCorrections={() => setCorrectionData([])} 
