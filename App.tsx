@@ -1,10 +1,10 @@
-
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import WebcamView from './components/WebcamView';
 import StatusDisplay from './components/StatusDisplay';
 import GazeCursor from './components/GazeCursor';
 import { ClickState, CalibrationPointData, BlinkStateMachine, DetectionStatus } from './types';
 import Icon from './components/Icon';
+import CalibrationScreen from './components/CalibrationScreen';
 
 // Extend the Window interface to include the 'cv' property
 declare global {
@@ -18,6 +18,7 @@ const FACE_CASCADE_URL = 'https://raw.githubusercontent.com/opencv/opencv/4.x/da
 const EYE_CASCADE_URL = 'https://raw.githubusercontent.com/opencv/opencv/4.x/data/haarcascades/haarcascade_eye.xml';
 
 const CAMERA_STORAGE_KEY = 'gazeTrack-selectedCameraId';
+const CALIBRATION_STORAGE_KEY = 'gazeTrack-calibrationData';
 
 // --- Procedural Mesh Templates (Normalized Coordinates) ---
 const FACE_MESH_TEMPLATE: {x: number, y: number}[] = [];
@@ -66,6 +67,24 @@ const App: React.FC = () => {
   const [correctionFeedback, setCorrectionFeedback] = useState(false);
   const [detectionStatus, setDetectionStatus] = useState<DetectionStatus>('searching');
   const [eyeBlinkState, setEyeBlinkState] = useState({ left: false, right: false });
+  const [isCalibrated, setIsCalibrated] = useState(false);
+
+  // Load calibration data on mount
+  useEffect(() => {
+    const savedData = localStorage.getItem(CALIBRATION_STORAGE_KEY);
+    if (savedData) {
+        try {
+            const parsedData = JSON.parse(savedData);
+            if (Array.isArray(parsedData) && parsedData.length > 0) {
+                setCorrectionData(parsedData);
+                setIsCalibrated(true);
+            }
+        } catch (e) {
+            console.error("Failed to parse calibration data from localStorage", e);
+            localStorage.removeItem(CALIBRATION_STORAGE_KEY);
+        }
+    }
+  }, []);
 
   // Sync state to ref for use in RAF loop
   useEffect(() => {
@@ -370,7 +389,7 @@ const App: React.FC = () => {
   }, []);
   
   const handleCorrectionClick = (e: React.MouseEvent) => {
-    if (!isCorrectionMode) return;
+    if (!isCorrectionMode || !isCalibrated) return;
     
     const newCorrection: CalibrationPointData = {
         screen: { x: e.clientX, y: e.clientY },
@@ -400,6 +419,21 @@ const App: React.FC = () => {
     };
   }, []);
 
+  const handleCalibrationComplete = (data: CalibrationPointData[]) => {
+    setCorrectionData(data);
+    localStorage.setItem(CALIBRATION_STORAGE_KEY, JSON.stringify(data));
+    setIsCalibrated(true);
+  };
+
+  const handleClearCorrections = () => {
+    setCorrectionData([]);
+    localStorage.removeItem(CALIBRATION_STORAGE_KEY);
+    setIsCalibrated(false);
+  };
+
+  const getEyePosition = useCallback(() => eyePositionRef.current, []);
+
+
   return (
     <div className="bg-gray-900 text-white min-h-screen flex flex-col items-center justify-center p-4 font-sans relative overflow-hidden" onClick={handleCorrectionClick}>
       <canvas ref={processingCanvasRef} style={{ display: 'none' }} />
@@ -425,24 +459,34 @@ const App: React.FC = () => {
             )}
          </div>
       )}
-
-      <main className="flex flex-col md:flex-row items-center justify-center gap-8 w-full">
-        <WebcamView 
-          videoRef={videoRef} 
-          isEnabled={!!selectedCameraId} 
-          selectedCameraId={selectedCameraId} 
-          canvasRef={displayCanvasRef} 
-          blinkState={eyeBlinkState}
-        />
-        <StatusDisplay 
-          detectionStatus={detectionStatus} 
-          onClearCorrections={() => setCorrectionData([])} 
-          cameras={cameras} 
-          selectedCameraId={selectedCameraId} 
-          onCameraChange={setSelectedCameraId} />
-      </main>
       
-      {!isCvLoading && !cvError && <GazeCursor position={cursorPosition} clickState={clickState} isCorrectionMode={isCorrectionMode} correctionFeedback={correctionFeedback} />}
+      {!isCvLoading && !cvError && (
+          <>
+            {isCalibrated ? (
+                <>
+                  <main className="flex flex-col md:flex-row items-center justify-center gap-8 w-full">
+                    <WebcamView 
+                      videoRef={videoRef} 
+                      isEnabled={!!selectedCameraId} 
+                      selectedCameraId={selectedCameraId} 
+                      canvasRef={displayCanvasRef} 
+                      blinkState={eyeBlinkState}
+                    />
+                    <StatusDisplay 
+                      detectionStatus={detectionStatus} 
+                      onClearCorrections={handleClearCorrections} 
+                      cameras={cameras} 
+                      selectedCameraId={selectedCameraId} 
+                      onCameraChange={setSelectedCameraId} 
+                    />
+                  </main>
+                  <GazeCursor position={cursorPosition} clickState={clickState} isCorrectionMode={isCorrectionMode} correctionFeedback={correctionFeedback} />
+                </>
+            ) : (
+                <CalibrationScreen onCalibrationComplete={handleCalibrationComplete} getEyePosition={getEyePosition} />
+            )}
+          </>
+      )}
     </div>
   );
 };

@@ -33,7 +33,7 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ detectionStatus, cameras,
       <div className="text-center mb-6">
         <p className={`text-lg font-semibold ${statusInfo.color} ${statusInfo.animate}`}>{statusInfo.text}</p>
           <button onClick={onClearCorrections} className="mt-2 text-sm underline text-cyan-400 hover:text-cyan-300 transition-colors">
-            Clear Corrections
+            Recalibrate
           </button>
       </div>
 
