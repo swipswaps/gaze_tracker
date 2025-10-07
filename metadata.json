@@ -1,6 +1,6 @@
 {
-  "name": "Webcam Gaze Tracker",
-  "description": "A web application that uses your webcam to simulate eye gaze tracking for controlling an on-screen cursor. Press and hold keyboard shortcuts to activate gaze-based movement and blink-based clicks.",
+  "name": "Webcam Head Tracker",
+  "description": "A web application that uses your webcam to track your head movement for controlling an on-screen cursor. Use the correction feature to improve accuracy.",
   "requestFramePermissions": [
     "camera"
   ]

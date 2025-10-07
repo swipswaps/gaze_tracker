@@ -41,8 +41,8 @@ const StatusDisplay: React.FC<StatusDisplayProps> = ({ detectionStatus, cameras,
         <div className="flex items-start space-x-4 p-4 rounded-lg bg-gray-800/50 border border-gray-700">
           <Icon name="eye" className="w-8 h-8 text-cyan-400 flex-shrink-0 mt-1" />
           <div>
-            <h3 className="font-bold">Gaze Tracking</h3>
-            <p className="text-sm text-gray-400">The cursor will follow your gaze. Accuracy improves with corrections.</p>
+            <h3 className="font-bold">Head Tracking</h3>
+            <p className="text-sm text-gray-400">The cursor will follow your head movement. Accuracy improves with corrections.</p>
           </div>
         </div>
         

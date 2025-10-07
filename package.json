@@ -1,5 +1,5 @@
 {
-  "name": "webcam-gaze-tracker",
+  "name": "webcam-head-tracker",
   "private": true,
   "version": "0.0.0",
   "type": "module",
